@@ -94,7 +94,18 @@ public class KSAVPlayer {
     }
 
     @available(tvOS 14.0, *)
-    public private(set) lazy var pipController: AVPictureInPictureController? = AVPictureInPictureController(playerLayer: playerView.playerLayer)
+    public var pipController: AVPictureInPictureController? {
+        _pipController as? AVPictureInPictureController
+    }
+    
+    private lazy var _pipController: Any? = {
+        if #available(tvOS 14.0, *) {
+            return AVPictureInPictureController(playerLayer: self.playerView.playerLayer)
+        } else {
+            return nil
+        }
+    }()
+    
     @available(macOS 12.0, iOS 15.0, tvOS 15.0, *)
     public var playbackCoordinator: AVPlaybackCoordinator {
         playerView.player.playbackCoordinator
@@ -385,6 +396,11 @@ extension KSAVPlayer: MediaPlayerProtocol {
             self.replaceCurrentItem(playerItem: playerItem)
             self.player.actionAtItemEnd = .pause
             self.player.volume = self.playbackVolume
+            
+            //@BWOOD fix for muted videos
+            if self.options.audioDisable {
+                self.player.isMuted = true
+            }
         }
     }
 
