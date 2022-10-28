@@ -145,16 +145,31 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
         engine.attach(dynamicsProcessor)
         var format = engine.outputNode.outputFormat(forBus: 0)
         KSPlayerManager.audioPlayerSampleRate = Int32(format.sampleRate)
-        if let channelLayout = format.channelLayout, KSPlayerManager.channelLayout != channelLayout {
-            format = AVAudioFormat(commonFormat: format.commonFormat, sampleRate: format.sampleRate, interleaved: format.isInterleaved, channelLayout: KSPlayerManager.channelLayout)
+        
+        if format.isInterleaved {
+            KSLog("Audio was interleaved, which isn't supported")
+            format = AVAudioFormat(commonFormat: format.commonFormat, sampleRate: format.sampleRate, interleaved: false, channelLayout: format.channelLayout ?? KSPlayerManager.channelLayout)
         }
-//        engine.attach(nbandEQ)
-//        engine.attach(distortion)
-//        engine.attach(delay)
+        
+        if format.commonFormat == .pcmFormatInt16 {
+            KSLog("Audio was 16 bit, which isn't supported")
+            format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, interleaved: false, channelLayout: format.channelLayout ?? KSPlayerManager.channelLayout)
+            isMuted = true
+        }
+        
+        if format.commonFormat == .pcmFormatInt32 {
+            KSLog("Audio was 32 bit int, which isn't supported")
+            format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, interleaved: false, channelLayout: format.channelLayout ?? KSPlayerManager.channelLayout)
+            isMuted = true
+        }
+        
+        KSLog("Audio \(format.commonFormat) \(format.sampleRate) \(format.isInterleaved) \(String(describing: format.channelLayout))")
+        
         let sourceNode = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, audioBufferList in
             self?.audioPlayerShouldInputData(ioData: UnsafeMutableAudioBufferListPointer(audioBufferList), numberOfFrames: frameCount)
             return noErr
         }
+        
         engine.attach(sourceNode)
         engine.connect(nodes: [sourceNode, dynamicsProcessor, engine.mainMixerNode, engine.outputNode], format: format)
 
