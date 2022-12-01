@@ -149,6 +149,7 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
         if format.isInterleaved {
             KSLog("Audio was interleaved, which isn't supported")
             format = AVAudioFormat(commonFormat: format.commonFormat, sampleRate: format.sampleRate, interleaved: false, channelLayout: format.channelLayout ?? KSPlayerManager.channelLayout)
+            isMuted = true
         }
         
         if format.commonFormat == .pcmFormatInt16 {
@@ -159,6 +160,12 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
         
         if format.commonFormat == .pcmFormatInt32 {
             KSLog("Audio was 32 bit int, which isn't supported")
+            format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, interleaved: false, channelLayout: format.channelLayout ?? KSPlayerManager.channelLayout)
+            isMuted = true
+        }
+        
+        if format.commonFormat == .otherFormat {
+            KSLog("Audio was other format, which isn't supported")
             format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: format.sampleRate, interleaved: false, channelLayout: format.channelLayout ?? KSPlayerManager.channelLayout)
             isMuted = true
         }
