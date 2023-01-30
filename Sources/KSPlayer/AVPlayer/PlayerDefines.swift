@@ -378,7 +378,7 @@ public enum KSPlayerManager {
         #else
         let category = AVAudioSession.sharedInstance().category
         if category != .playback, category != .playAndRecord {
-            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, policy: .longFormAudio)
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.duckOthers])
         }
         try? AVAudioSession.sharedInstance().setActive(true)
         let maxOut = AVAudioSession.sharedInstance().maximumOutputNumberOfChannels
