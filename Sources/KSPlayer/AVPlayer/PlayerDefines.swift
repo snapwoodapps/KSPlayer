@@ -378,7 +378,15 @@ public enum KSPlayerManager {
         #else
         let category = AVAudioSession.sharedInstance().category
         if category != .playback, category != .playAndRecord {
+#if os(tvOS)
+            if #available(tvOS 17.0, *) {
+                try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.allowAirPlay, .allowBluetoothA2DP, .duckOthers])
+            } else {
+                try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, policy: .longFormAudio, options: [.allowAirPlay, .mixWithOthers])
+            }
+#else
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, policy: .longFormAudio, options: [.allowAirPlay, .mixWithOthers])
+#endif
         }
         try? AVAudioSession.sharedInstance().setActive(true)
         let maxOut = AVAudioSession.sharedInstance().maximumOutputNumberOfChannels
