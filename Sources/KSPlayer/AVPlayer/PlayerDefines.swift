@@ -385,7 +385,7 @@ public enum KSPlayerManager {
                 try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, policy: .longFormAudio, options: [.allowAirPlay, .mixWithOthers])
             }
 #else
-            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, policy: .longFormAudio, options: [.allowAirPlay, .mixWithOthers])
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback, policy: .default, options: [.allowAirPlay, .mixWithOthers])
 #endif
         }
         try? AVAudioSession.sharedInstance().setActive(true)
