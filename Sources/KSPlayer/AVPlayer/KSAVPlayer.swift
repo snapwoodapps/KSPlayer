@@ -207,10 +207,11 @@ extension KSAVPlayer {
         if item.status == .readyToPlay {
             options.findTime = CACurrentMediaTime()
             let videoTracks = item.tracks.filter { $0.assetTrack?.mediaType.rawValue == AVMediaType.video.rawValue }
-            if videoTracks.isEmpty || videoTracks.allSatisfy({ $0.assetTrack?.isPlayable == false }) {
-                error = NSError(errorCode: .videoTracksUnplayable)
-                return
-            }
+// try to play everything and if it fails, it fails
+//            if videoTracks.isEmpty || videoTracks.allSatisfy({ $0.assetTrack?.isPlayable == false }) {
+//                error = NSError(errorCode: .videoTracksUnplayable)
+//                return
+//            }
             // 默认选择第一个声道
             item.tracks.filter { $0.assetTrack?.mediaType.rawValue == AVMediaType.audio.rawValue }.dropFirst().forEach { $0.isEnabled = false }
             duration = item.duration.seconds
