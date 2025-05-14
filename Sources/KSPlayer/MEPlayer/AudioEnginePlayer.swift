@@ -143,7 +143,8 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
     init() {
         KSPlayerManager.setAudioSession()
         engine.attach(dynamicsProcessor)
-        var format = engine.outputNode.outputFormat(forBus: 0)
+//        var format = engine.outputNode.outputFormat(forBus: 0)
+        var format = engine.mainMixerNode.outputFormat(forBus: 0)
         KSPlayerManager.audioPlayerSampleRate = Int32(format.sampleRate)
         
         if format.isInterleaved {
@@ -172,13 +173,17 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
         
         KSLog("Audio \(format.commonFormat) \(format.sampleRate) \(format.isInterleaved) \(String(describing: format.channelLayout))")
         
-        let sourceNode = AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, audioBufferList in
-            self?.audioPlayerShouldInputData(ioData: UnsafeMutableAudioBufferListPointer(audioBufferList), numberOfFrames: frameCount)
-            return noErr
+        do {
+            let sourceNode = try AVAudioSourceNode(format: format) { [weak self] _, _, frameCount, audioBufferList in
+                self?.audioPlayerShouldInputData(ioData: UnsafeMutableAudioBufferListPointer(audioBufferList), numberOfFrames: frameCount)
+                return noErr
+            }
+            
+            engine.attach(sourceNode)
+            engine.connect(nodes: [sourceNode, dynamicsProcessor, engine.mainMixerNode, engine.outputNode], format: format)
+        } catch {
+            isMuted = true
         }
-        
-        engine.attach(sourceNode)
-        engine.connect(nodes: [sourceNode, dynamicsProcessor, engine.mainMixerNode, engine.outputNode], format: format)
 
         if let audioUnit = engine.outputNode.audioUnit {
             addRenderNotify(audioUnit: audioUnit)
