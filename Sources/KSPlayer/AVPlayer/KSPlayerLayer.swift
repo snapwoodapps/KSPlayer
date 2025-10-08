@@ -69,6 +69,20 @@ open class KSPlayerLayer: UIView {
     private var bufferedCount = 0
     private var shouldSeekTo: TimeInterval = 0
     private var startTime: TimeInterval = 0
+    
+    private var playToken: Any?
+    private var pauseToken: Any?
+    private var toggleToken: Any?
+    private var stopToken: Any?
+    private var nextToken: Any?
+    private var prevToken: Any?
+    private var repeatToken: Any?
+    private var rateToken: Any?
+    private var skipFwdToken: Any?
+    private var skipBackToken: Any?
+    private var positionToken: Any?
+    private var langToken: Any?
+        
     private var url: URL? {
         didSet {
             guard let url = url, let options = options else {
@@ -106,19 +120,7 @@ open class KSPlayerLayer: UIView {
 
     private var urls = [URL]()
     private var isAutoPlay = false
-    private lazy var timer: Timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-        guard let self = self, let player = self.player, player.isPreparedToPlay else {
-            return
-        }
-        self.delegate?.player(layer: self, currentTime: player.currentPlaybackTime, totalTime: player.duration)
-        if player.playbackState == .playing, player.loadState == .playable, self.state == .buffering {
-            // 一个兜底保护，正常不能走到这里
-            self.state = .bufferFinished
-        }
-        if player.isPlaying {
-            MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentPlaybackTime
-        }
-    }
+    private var _timer: Timer?
 
     public var player: MediaPlayerProtocol? {
         didSet {
@@ -164,6 +166,21 @@ open class KSPlayerLayer: UIView {
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        
+        let rc = MPRemoteCommandCenter.shared()
+        
+        if let t = playToken    { rc.playCommand.removeTarget(t); playToken = nil }
+        if let t = pauseToken   { rc.pauseCommand.removeTarget(t); pauseToken = nil }
+        if let t = toggleToken  { rc.togglePlayPauseCommand.removeTarget(t); toggleToken = nil }
+        if let t = stopToken    { rc.stopCommand.removeTarget(t); stopToken = nil }
+        if let t = nextToken    { rc.nextTrackCommand.removeTarget(t); nextToken = nil }
+        if let t = prevToken    { rc.previousTrackCommand.removeTarget(t); prevToken = nil }
+        if let t = repeatToken  { rc.changeRepeatModeCommand.removeTarget(t); repeatToken = nil }
+        if let t = rateToken    { rc.changePlaybackRateCommand.removeTarget(t); rateToken = nil }
+        if let t = skipFwdToken { rc.skipForwardCommand.removeTarget(t); skipFwdToken = nil }
+        if let t = skipBackToken{ rc.skipBackwardCommand.removeTarget(t); skipBackToken = nil }
+        if let t = positionToken{ rc.changePlaybackPositionCommand.removeTarget(t); positionToken = nil }
+        if let t = langToken    { rc.enableLanguageOptionCommand.removeTarget(t); langToken = nil }
     }
 
     public func set(url: URL, options: KSOptions) {
@@ -181,6 +198,25 @@ open class KSPlayerLayer: UIView {
         self.urls.append(contentsOf: urls)
         url = urls.first
     }
+    
+    public func timer() -> Timer? {
+        if(_timer == nil) {
+            _timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+                guard let self = self, let player = self.player, player.isPreparedToPlay else {
+                    return
+                }
+                self.delegate?.player(layer: self, currentTime: player.currentPlaybackTime, totalTime: player.duration)
+                if player.playbackState == .playing, player.loadState == .playable, self.state == .buffering {
+                    // 一个兜底保护，正常不能走到这里
+                    self.state = .bufferFinished
+                }
+                if player.isPlaying {
+                    MPNowPlayingInfoCenter.default().nowPlayingInfo?[MPNowPlayingInfoPropertyElapsedPlaybackTime] = player.currentPlaybackTime
+                }
+            }
+        }
+        return _timer
+    }
 
     open func play() {
 //        UIApplication.shared.isIdleTimerDisabled = true
@@ -196,7 +232,7 @@ open class KSPlayerLayer: UIView {
                 } else {
                     player.play()
                 }
-                timer.fireDate = Date.distantPast
+                timer()?.fireDate = Date.distantPast
             } else {
                 if state == .error {
                     player.prepareToPlay()
@@ -212,7 +248,7 @@ open class KSPlayerLayer: UIView {
     open func pause() {
         isAutoPlay = false
         player?.pause()
-        timer.fireDate = Date.distantFuture
+        timer()?.fireDate = Date.distantFuture
         state = .paused
 //        UIApplication.shared.isIdleTimerDisabled = false
         MPNowPlayingInfoCenter.default().playbackState = .paused
@@ -225,6 +261,8 @@ open class KSPlayerLayer: UIView {
         shouldSeekTo = 0
         player?.playbackRate = 1
         player?.playbackVolume = 1
+        _timer?.invalidate()
+        _timer = nil
 //        UIApplication.shared.isIdleTimerDisabled = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         #if os(tvOS)
@@ -343,7 +381,9 @@ extension KSPlayerLayer: MediaPlayerDelegate {
             delegate?.player(layer: self, currentTime: duration, totalTime: duration)
             state = .playedToTheEnd
         }
-        timer.fireDate = Date.distantFuture
+        _timer?.fireDate = Date.distantFuture
+        _timer?.invalidate()
+        _timer = nil
         bufferedCount = 1
         delegate?.player(layer: self, finish: error)
         if error == nil {
@@ -424,6 +464,8 @@ extension KSPlayerLayer {
     }
 
     private func nextPlayer() {
+        _timer?.invalidate()
+        _timer = nil
         if urls.count > 1, let url = url, let index = urls.firstIndex(of: url), index < urls.count - 1 {
             isAutoPlay = true
             self.url = urls[index + 1]
@@ -439,21 +481,21 @@ extension KSPlayerLayer {
 
     private func registerRemoteControllEvent() {
         let remoteCommand = MPRemoteCommandCenter.shared()
-        remoteCommand.playCommand.addTarget { [weak self] _ in
+        playToken = remoteCommand.playCommand.addTarget { [weak self] _ in
             guard let self = self else {
                 return .commandFailed
             }
             self.play()
             return .success
         }
-        remoteCommand.pauseCommand.addTarget { [weak self] _ in
+        pauseToken = remoteCommand.pauseCommand.addTarget { [weak self] _ in
             guard let self = self else {
                 return .commandFailed
             }
             self.pause()
             return .success
         }
-        remoteCommand.togglePlayPauseCommand.addTarget { [weak self] _ in
+        toggleToken = remoteCommand.togglePlayPauseCommand.addTarget { [weak self] _ in
             guard let self = self else {
                 return .commandFailed
             }
@@ -464,28 +506,28 @@ extension KSPlayerLayer {
             }
             return .success
         }
-        remoteCommand.stopCommand.addTarget { [weak self] _ in
+        stopToken = remoteCommand.stopCommand.addTarget { [weak self] _ in
             guard let self = self else {
                 return .commandFailed
             }
             self.player?.shutdown()
             return .success
         }
-        remoteCommand.nextTrackCommand.addTarget { [weak self] _ in
+        nextToken = remoteCommand.nextTrackCommand.addTarget { [weak self] _ in
             guard let self = self else {
                 return .commandFailed
             }
             self.nextPlayer()
             return .success
         }
-        remoteCommand.previousTrackCommand.addTarget { [weak self] _ in
+        prevToken = remoteCommand.previousTrackCommand.addTarget { [weak self] _ in
             guard let self = self else {
                 return .commandFailed
             }
             self.previousPlayer()
             return .success
         }
-        remoteCommand.changeRepeatModeCommand.addTarget { [weak self] event in
+        repeatToken = remoteCommand.changeRepeatModeCommand.addTarget { [weak self] event in
             guard let self = self, let event = event as? MPChangeRepeatModeCommandEvent else {
                 return .commandFailed
             }
@@ -495,7 +537,7 @@ extension KSPlayerLayer {
         remoteCommand.changeShuffleModeCommand.isEnabled = false
         // remoteCommand.changeShuffleModeCommand.addTarget {})
         remoteCommand.changePlaybackRateCommand.supportedPlaybackRates = [0.5, 1, 1.5, 2]
-        remoteCommand.changePlaybackRateCommand.addTarget { [weak self] event in
+        rateToken = remoteCommand.changePlaybackRateCommand.addTarget { [weak self] event in
             guard let self = self, let event = event as? MPChangePlaybackRateCommandEvent else {
                 return .commandFailed
             }
@@ -503,7 +545,7 @@ extension KSPlayerLayer {
             return .success
         }
         remoteCommand.skipForwardCommand.preferredIntervals = [15]
-        remoteCommand.skipForwardCommand.addTarget { [weak self] event in
+        skipFwdToken = remoteCommand.skipForwardCommand.addTarget { [weak self] event in
             guard let self = self, let event = event as? MPSkipIntervalCommandEvent else {
                 return .commandFailed
             }
@@ -511,21 +553,21 @@ extension KSPlayerLayer {
             return .success
         }
         remoteCommand.skipBackwardCommand.preferredIntervals = [15]
-        remoteCommand.skipBackwardCommand.addTarget { [weak self] event in
+        skipBackToken = remoteCommand.skipBackwardCommand.addTarget { [weak self] event in
             guard let self = self, let event = event as? MPSkipIntervalCommandEvent else {
                 return .commandFailed
             }
             self.seek(time: self.player?.currentPlaybackTime ?? 0 - event.interval, autoPlay: self.options?.isSeekedAutoPlay ?? false)
             return .success
         }
-        remoteCommand.changePlaybackPositionCommand.addTarget { [weak self] event in
+        positionToken = remoteCommand.changePlaybackPositionCommand.addTarget { [weak self] event in
             guard let self = self, let event = event as? MPChangePlaybackPositionCommandEvent else {
                 return .commandFailed
             }
             self.seek(time: event.positionTime, autoPlay: self.options?.isSeekedAutoPlay ?? false)
             return .success
         }
-        remoteCommand.enableLanguageOptionCommand.addTarget { [weak self] event in
+        langToken = remoteCommand.enableLanguageOptionCommand.addTarget { [weak self] event in
             guard let self = self, let event = event as? MPChangeLanguageOptionCommandEvent else {
                 return .commandFailed
             }

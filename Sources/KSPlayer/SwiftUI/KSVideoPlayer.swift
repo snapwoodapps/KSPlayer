@@ -54,13 +54,16 @@ public struct KSVideoPlayerView: View {
                 }
             }
             #if os(tvOS)
-            .onSwipe { direction in
-                if direction == .down {
-                    model.isMaskShow.toggle()
-                } else if direction == .left {
-                    player.coordinator.seek(time: model.currentTime - 15)
-                } else if direction == .right {
-                    player.coordinator.seek(time: model.currentTime + 15)
+            .onSwipe { [weak coord = player.coordinator] direction in
+                switch direction {
+                    case .down:
+                        model.isMaskShow.toggle()
+                    case .left:
+                        coord?.seek(time: model.currentTime - 15)
+                    case .right:
+                        coord?.seek(time: model.currentTime + 15)
+                    default:
+                        break
                 }
             }
             #else
@@ -383,8 +386,15 @@ extension KSVideoPlayer: UIViewRepresentable {
         updateView(uiView, context: context)
     }
 
-    public static func dismantleUIView(_ uiView: UIViewType, coordinator _: Coordinator) {
+    public static func dismantleUIView(_ uiView: UIViewType, coordinator: Coordinator) {
         uiView.pause()
+        coordinator.onPlay = nil
+        coordinator.onFinish = nil
+        coordinator.onStateChanged = nil
+        coordinator.onBufferChanged = nil
+#if canImport(UIKit)
+        coordinator.onSwipe = nil
+#endif
     }
     #else
     public typealias NSViewType = KSPlayerLayer

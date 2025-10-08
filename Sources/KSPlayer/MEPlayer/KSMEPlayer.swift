@@ -99,7 +99,17 @@ public class KSMEPlayer: NSObject {
     }
 
     deinit {
+        bufferingCountDownTimer?.invalidate()
+        bufferingCountDownTimer = nil
+        
+        // Break any strong references from renderers to the item
+        audioOutput.renderSource = nil
+        videoOutput.renderSource = nil
+        videoOutput.isPaused = true
+        
+        // Final item cleanup (you already do this in deinit, keep it)
         playerItem.shutdown()
+        playerItem.delegate = nil
     }
 }
 

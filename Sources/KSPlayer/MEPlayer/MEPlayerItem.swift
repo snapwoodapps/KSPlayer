@@ -55,20 +55,30 @@ final class MEPlayerItem {
             case .opened:
                 delegate?.sourceDidOpened()
             case .reading:
-                timer.fireDate = Date.distantPast
+                getTimer()?.fireDate = Date.distantPast
             case .closed:
-                timer.invalidate()
+                _timer?.invalidate()
             case .failed:
                 delegate?.sourceDidFailed(error: error)
-                timer.fireDate = Date.distantFuture
-            case .idle, .opening, .seeking, .paused, .finished:
+                getTimer()?.fireDate = Date.distantFuture
+                    _timer?.invalidate()
+            case .finished:
+                _timer?.invalidate()
+            case .idle, .opening, .seeking, .paused:
                 break
             }
         }
     }
-
-    private lazy var timer: Timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-        self?.codecDidChangeCapacity()
+    
+    var _timer: Timer? = nil
+    
+    func getTimer() -> Timer? {
+        if(_timer == nil) {
+            _timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                self?.codecDidChangeCapacity()
+            }
+        }
+        return _timer
     }
 
     weak var delegate: MEPlayerDelegate?
@@ -76,7 +86,7 @@ final class MEPlayerItem {
     init(url: URL, options: KSOptions) {
         self.url = url
         self.options = options
-        timer.fireDate = Date.distantFuture
+        getTimer()?.fireDate = Date.distantFuture
         avformat_network_init()
         av_log_set_callback { _, level, format, args in
             guard let format = format, level <= KSPlayerManager.logLevel.rawValue else {
@@ -468,7 +478,7 @@ extension MEPlayerItem: CodecCapacityDelegate {
         let allSatisfy = videoAudioTracks.allSatisfy { $0.isEndOfFile && $0.frameCount == 0 && $0.packetCount == 0 }
         delegate?.sourceDidFinished(type: track.mediaType, allSatisfy: allSatisfy)
         if allSatisfy {
-            timer.fireDate = Date.distantFuture
+            getTimer()?.fireDate = Date.distantFuture
             if options.isLoopPlay {
                 isAudioStalled = audioTrack == nil
                 audioTrack?.isLoopModel = false
@@ -477,6 +487,8 @@ extension MEPlayerItem: CodecCapacityDelegate {
                     state = .reading
                     read()
                 }
+            } else {
+                _timer?.invalidate()
             }
         }
     }

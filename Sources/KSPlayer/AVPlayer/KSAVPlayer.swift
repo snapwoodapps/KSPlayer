@@ -178,6 +178,31 @@ public class KSAVPlayer {
             self.observer(playerItem: player.currentItem)
         }
     }
+    
+    deinit {
+        // Notifications (selector-based)
+        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
+        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: nil)
+        
+        // KVO
+        itemObservation?.invalidate();            itemObservation = nil
+        statusObservation?.invalidate();          statusObservation = nil
+        loadedTimeRangesObservation?.invalidate();loadedTimeRangesObservation = nil
+        bufferEmptyObservation?.invalidate();     bufferEmptyObservation = nil
+        likelyToKeepUpObservation?.invalidate();  likelyToKeepUpObservation = nil
+        bufferFullObservation?.invalidate();      bufferFullObservation = nil
+        loopCountObservation?.invalidate();       loopCountObservation = nil
+        loopStatusObservation?.invalidate();      loopStatusObservation = nil
+        
+        // Combine
+        cancellable?.cancel();                    cancellable = nil
+        
+        // AV
+        player.currentItem?.cancelPendingSeeks()
+        urlAsset.cancelLoading()
+        player.pause()
+        player.removeAllItems()
+    }
 }
 
 extension KSAVPlayer {
@@ -248,25 +273,28 @@ extension KSAVPlayer {
     }
 
     private func replaceCurrentItem(playerItem: AVPlayerItem?) {
+        // Always clear old state first
+        loopCountObservation?.invalidate();  loopCountObservation = nil
+        loopStatusObservation?.invalidate(); loopStatusObservation = nil
+        playerLooper?.disableLooping();      playerLooper = nil
+        
         player.currentItem?.cancelPendingSeeks()
+        
+        guard let playerItem else {
+            player.replaceCurrentItem(with: nil)
+            return
+        }
+        
         if options.isLoopPlay {
-            loopCountObservation?.invalidate()
-            loopStatusObservation?.invalidate()
-            playerLooper?.disableLooping()
-            guard let playerItem = playerItem else {
-                playerLooper = nil
-                return
+            let looper = AVPlayerLooper(player: player, templateItem: playerItem)
+            playerLooper = looper
+            loopCountObservation = looper.observe(\.loopCount) { [weak self] looper, _ in
+                guard let self else { return }
+                self.delegate?.playBack(player: self, loopCount: looper.loopCount)
             }
-            playerLooper = AVPlayerLooper(player: player, templateItem: playerItem)
-            loopCountObservation = playerLooper?.observe(\.loopCount) { [weak self] playerLooper, _ in
-                guard let self = self else { return }
-                self.delegate?.playBack(player: self, loopCount: playerLooper.loopCount)
-            }
-            loopStatusObservation = playerLooper?.observe(\.status) { [weak self] playerLooper, _ in
-                guard let self = self else { return }
-                if playerLooper.status == .failed {
-                    self.error = playerLooper.error
-                }
+            loopStatusObservation = looper.observe(\.status) { [weak self] looper, _ in
+                guard let self else { return }
+                if looper.status == .failed { self.error = looper.error }
             }
         } else {
             player.replaceCurrentItem(with: playerItem)
@@ -274,16 +302,20 @@ extension KSAVPlayer {
     }
 
     private func observer(playerItem: AVPlayerItem?) {
-        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: playerItem)
-        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: playerItem)
+        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
+        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: nil)
+        
         statusObservation?.invalidate()
         loadedTimeRangesObservation?.invalidate()
         bufferEmptyObservation?.invalidate()
         likelyToKeepUpObservation?.invalidate()
         bufferFullObservation?.invalidate()
+        
         guard let playerItem = playerItem else { return }
+        
         NotificationCenter.default.addObserver(self, selector: #selector(moviePlayDidEnd), name: .AVPlayerItemDidPlayToEndTime, object: playerItem)
         NotificationCenter.default.addObserver(self, selector: #selector(playerItemFailedToPlayToEndTime), name: .AVPlayerItemFailedToPlayToEndTime, object: playerItem)
+        
         statusObservation = playerItem.observe(\.status) { [weak self] item, _ in
             guard let self = self else { return }
             self.updateStatus(item: item)
@@ -422,6 +454,8 @@ extension KSAVPlayer: MediaPlayerProtocol {
         loadState = .idle
         urlAsset.cancelLoading()
         replaceCurrentItem(playerItem: nil)
+        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
+        NotificationCenter.default.removeObserver(self, name: .AVPlayerItemFailedToPlayToEndTime, object: nil)
     }
 
     public func replace(url: URL, options: KSOptions) {

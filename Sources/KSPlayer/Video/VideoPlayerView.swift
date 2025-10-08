@@ -101,7 +101,8 @@ open class VideoPlayerView: PlayerView {
     open var isMaskShow = true {
         didSet {
             let alpha: CGFloat = isMaskShow && !isLock ? 1.0 : 0.0
-            UIView.animate(withDuration: 0.3) {
+            UIView.animate(withDuration: 0.3) { [weak self] in
+                guard let self else { return }
                 if self.isPlayed {
                     self.replayButton.alpha = self.isMaskShow ? 1.0 : 0.0
                 }

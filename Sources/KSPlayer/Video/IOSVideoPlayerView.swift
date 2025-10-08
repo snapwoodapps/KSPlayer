@@ -20,7 +20,7 @@ open class IOSVideoPlayerView: VideoPlayerView {
     private var isPlayingForCall = false
 //    private let callCenter = CXCallObserver()
     private var isVolume = false
-    private let volumeView = BrightnessVolume()
+//    private let volumeView = BrightnessVolume()
     private var cancellable: AnyCancellable?
     public var volumeViewSlider = UXSlider()
     public var backButton = UIButton()
@@ -63,11 +63,11 @@ open class IOSVideoPlayerView: VideoPlayerView {
         routeButton.isHidden = true
         navigationBar.addArrangedSubview(routeButton)
         addSubview(airplayStatusView)
-        volumeView.move(to: self)
-        let tmp = MPVolumeView(frame: CGRect(x: -100, y: -100, width: 0, height: 0))
-        if let first = (tmp.subviews.first { $0 is UISlider }) as? UISlider {
-            volumeViewSlider = first
-        }
+//        volumeView.move(to: self)
+//        let tmp = MPVolumeView(frame: CGRect(x: -100, y: -100, width: 0, height: 0))
+//        if let first = (tmp.subviews.first { $0 is UISlider }) as? UISlider {
+//            volumeViewSlider = first
+//        }
         routeButton.translatesAutoresizingMaskIntoConstraints = false
         backButton.translatesAutoresizingMaskIntoConstraints = false
         landscapeButton.translatesAutoresizingMaskIntoConstraints = false
@@ -292,8 +292,8 @@ extension IOSVideoPlayerView: UIViewControllerTransitioningDelegate {
 
 extension IOSVideoPlayerView {
     private func addNotification() {
-        NotificationCenter.default.addObserver(self, selector: #selector(orientationChanged), name: UIApplication.didChangeStatusBarOrientationNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(routesAvailableDidChange), name: .AVRouteDetectorMultipleRoutesDetectedDidChange, object: nil)
+//        NotificationCenter.default.addObserver(self, selector: #selector(orientationChanged), name: UIApplication.didChangeStatusBarOrientationNotification, object: nil)
+//        NotificationCenter.default.addObserver(self, selector: #selector(routesAvailableDidChange), name: .AVRouteDetectorMultipleRoutesDetectedDidChange, object: nil)
 //        callCenter.setDelegate(self, queue: DispatchQueue.main)
     }
 
