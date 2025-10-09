@@ -35,6 +35,11 @@ open class IOSVideoPlayerView: VideoPlayerView {
             fullScreenDelegate?.player(isMaskShow: isMaskShow, isFullScreen: landscapeButton.isSelected)
         }
     }
+    
+    deinit {
+        cancellable?.cancel()
+        cancellable = nil
+    }
 
     override open func customizeUIComponents() {
         super.customizeUIComponents()

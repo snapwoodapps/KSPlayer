@@ -82,6 +82,7 @@ open class KSPlayerLayer: UIView {
     private var skipBackToken: Any?
     private var positionToken: Any?
     private var langToken: Any?
+    private var commandsRegistered = false
         
     private var url: URL? {
         didSet {
@@ -163,12 +164,28 @@ open class KSPlayerLayer: UIView {
     public required init?(coder _: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
+    
+    override open func willMove(toSuperview newSuperview: UIView?) {
+        if newSuperview == nil {
+            _timer?.invalidate()
+            _timer = nil
+        }
+        super.willMove(toSuperview: newSuperview)
+    }
 
     deinit {
         NotificationCenter.default.removeObserver(self)
         
-        let rc = MPRemoteCommandCenter.shared()
+        _timer?.invalidate()   // <-- missing
+        _timer = nil
         
+        unregisterRemoteControllEvent()
+    }
+    
+    private func unregisterRemoteControllEvent() {
+        guard commandsRegistered else { return }
+        commandsRegistered = false
+        let rc = MPRemoteCommandCenter.shared()
         if let t = playToken    { rc.playCommand.removeTarget(t); playToken = nil }
         if let t = pauseToken   { rc.pauseCommand.removeTarget(t); pauseToken = nil }
         if let t = toggleToken  { rc.togglePlayPauseCommand.removeTarget(t); toggleToken = nil }
@@ -261,8 +278,8 @@ open class KSPlayerLayer: UIView {
         shouldSeekTo = 0
         player?.playbackRate = 1
         player?.playbackVolume = 1
-        _timer?.invalidate()
-        _timer = nil
+        _timer?.invalidate(); _timer = nil
+        unregisterRemoteControllEvent()
 //        UIApplication.shared.isIdleTimerDisabled = false
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         #if os(tvOS)
@@ -426,6 +443,19 @@ extension KSPlayerLayer {
     }
     #endif
 
+    
+    override open func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil {
+            // View is offscreen: stop everything.
+            _timer?.invalidate(); _timer = nil
+            unregisterRemoteControllEvent()
+            player?.shutdown()
+            player = nil
+            state = .notSetURL
+        }
+    }
+    
     private func prepareToPlay() {
         startTime = CACurrentMediaTime()
         bufferedCount = 0
@@ -480,6 +510,8 @@ extension KSPlayerLayer {
     }
 
     private func registerRemoteControllEvent() {
+        guard !commandsRegistered else { return }
+        commandsRegistered = true
         let remoteCommand = MPRemoteCommandCenter.shared()
         playToken = remoteCommand.playCommand.addTarget { [weak self] _ in
             guard let self = self else {

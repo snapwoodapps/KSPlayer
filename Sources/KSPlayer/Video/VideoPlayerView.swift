@@ -318,6 +318,7 @@ open class VideoPlayerView: PlayerView {
         isPlayed = false
         embedSubtitleDataSouce = nil
         lockButton.isSelected = false
+        srtControl.selectWithFilePath = nil
     }
 
     // MARK: - KSSliderDelegate
