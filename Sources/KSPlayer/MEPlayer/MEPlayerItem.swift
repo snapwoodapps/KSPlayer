@@ -62,9 +62,7 @@ final class MEPlayerItem {
                 delegate?.sourceDidFailed(error: error)
                 getTimer()?.fireDate = Date.distantFuture
                     _timer?.invalidate()
-            case .finished:
-                _timer?.invalidate()
-            case .idle, .opening, .seeking, .paused:
+            case .idle, .opening, .seeking, .paused, .finished:
                 break
             }
         }
@@ -104,6 +102,11 @@ final class MEPlayerItem {
         operationQueue.name = "KSPlayer_" + String(describing: self).components(separatedBy: ".").last!
         operationQueue.maxConcurrentOperationCount = 1
         operationQueue.qualityOfService = .userInteractive
+    }
+    
+    deinit {
+        _timer?.invalidate()
+        _timer = nil
     }
 
     func select(track: MediaPlayerTrack) {
@@ -487,8 +490,6 @@ extension MEPlayerItem: CodecCapacityDelegate {
                     state = .reading
                     read()
                 }
-            } else {
-                _timer?.invalidate()
             }
         }
     }
