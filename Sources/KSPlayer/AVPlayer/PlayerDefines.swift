@@ -371,6 +371,58 @@ public enum KSPlayerManager {
     public static var logFunctionPoint: (String) -> Void = {
         print($0)
     }
+    
+    static public func activateAudioSession(duckOthers: Bool) {
+#if os(macOS)
+        return
+#else
+        let session = AVAudioSession.sharedInstance()
+        
+        do {
+#if os(tvOS)
+            if #available(tvOS 17.0, *) {
+                var options: AVAudioSession.CategoryOptions = [.allowAirPlay, .allowBluetoothA2DP]
+                if duckOthers {
+                    options.insert(.duckOthers)
+                } else {
+                    options.insert(.mixWithOthers)
+                }
+                
+                try session.setCategory(.playback, mode: .default, options: options)
+            } else {
+                var options: AVAudioSession.CategoryOptions = [.allowAirPlay, .mixWithOthers]
+                if duckOthers {
+                    options.insert(.duckOthers)
+                }
+                
+                try session.setCategory(.playback, mode: .moviePlayback, policy: .longFormAudio, options: options)
+            }
+#else
+            var options: AVAudioSession.CategoryOptions = [.allowAirPlay, .mixWithOthers]
+            if duckOthers {
+                options.insert(.duckOthers)
+            }
+            try session.setCategory(.playback, mode: .moviePlayback, policy: .default, options: options)
+#endif
+            
+            try session.setActive(true)
+        } catch {
+            KSLog("Audio session activation failed: \(error)")
+        }
+#endif
+    }
+    
+    static public func deactivateAudioSession() {
+#if os(macOS)
+        return
+#else
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        } catch {
+            KSLog("Audio session deactivation failed: \(error)")
+        }
+#endif
+    }
 
     static func setAudioSession() {
         #if os(macOS)
