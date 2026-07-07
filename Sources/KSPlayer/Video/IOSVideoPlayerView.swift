@@ -21,13 +21,16 @@ open class IOSVideoPlayerView: VideoPlayerView {
 //    private let callCenter = CXCallObserver()
     private var isVolume = false
     private let pinchGesture = UIPinchGestureRecognizer()
+    private let videoZoomPanGesture = UIPanGestureRecognizer()
     private let minimumVideoZoomScale = CGFloat(1.0)
     private let maximumVideoZoomScale = CGFloat(5.0)
     private var videoZoomScale = CGFloat(1.0)
     private var videoZoomOffset = CGPoint.zero
+    private var videoZoomPanStartOffset = CGPoint.zero
     private var pinchStartZoomScale = CGFloat(1.0)
     private var pinchStartZoomOffset = CGPoint.zero
     private var pinchStartLocation = CGPoint.zero
+    private var wasVideoZoomInteractionActive = false
 //    private let volumeView = BrightnessVolume()
     private var cancellable: AnyCancellable?
     public var volumeViewSlider = UXSlider()
@@ -35,6 +38,10 @@ open class IOSVideoPlayerView: VideoPlayerView {
     public var airplayStatusView: UIView = AirplayStatusView()
     public var routeButton = AVRoutePickerView()
     private let routeDetector = AVRouteDetector()
+    public var videoZoomInteractionDidChange: ((Bool) -> Void)?
+    public private(set) var isVideoZooming = false
+    public var isVideoZoomed: Bool { videoZoomScale > minimumVideoZoomScale + 0.01 }
+    public var isVideoZoomInteractionActive: Bool { isVideoZooming || isVideoZoomed }
     /// Image view to show video cover
     public var maskImageView = UIImageView()
     public var landscapeButton = UIButton()
@@ -62,6 +69,11 @@ open class IOSVideoPlayerView: VideoPlayerView {
         pinchGesture.addTarget(self, action: #selector(pinchGestureAction(_:)))
         pinchGesture.cancelsTouchesInView = false
         controllerView.addGestureRecognizer(pinchGesture)
+        videoZoomPanGesture.addTarget(self, action: #selector(videoZoomPanGestureAction(_:)))
+        videoZoomPanGesture.maximumNumberOfTouches = 1
+        videoZoomPanGesture.cancelsTouchesInView = false
+        videoZoomPanGesture.isEnabled = false
+        controllerView.addGestureRecognizer(videoZoomPanGesture)
         if UIDevice.current.userInterfaceIdiom == .phone {
             subtitleLabel.font = .systemFont(ofSize: 14)
         }
@@ -324,14 +336,17 @@ extension IOSVideoPlayerView {
         }
         switch pinch.state {
         case .began:
+            isVideoZooming = true
             pinchStartZoomScale = videoZoomScale
             pinchStartZoomOffset = videoZoomOffset
             pinchStartLocation = pinch.location(in: playerLayer)
+            notifyVideoZoomInteractionIfNeeded()
         case .changed:
             let scale = clampedVideoZoomScale(pinchStartZoomScale * pinch.scale)
             let offset = videoZoomOffset(for: scale, location: pinch.location(in: playerLayer))
             setVideoZoom(scale: scale, offset: offset, animated: false)
         case .ended, .cancelled, .failed:
+            isVideoZooming = false
             if videoZoomScale <= minimumVideoZoomScale + 0.01 {
                 resetVideoZoom(animated: true)
             } else {
@@ -342,7 +357,32 @@ extension IOSVideoPlayerView {
         }
     }
 
+    @objc private func videoZoomPanGestureAction(_ pan: UIPanGestureRecognizer) {
+        guard isVideoZoomed, !isLock, playerLayer.player?.view != nil else {
+            return
+        }
+        switch pan.state {
+        case .began:
+            isVideoZooming = true
+            videoZoomPanStartOffset = videoZoomOffset
+            notifyVideoZoomInteractionIfNeeded()
+        case .changed:
+            let translation = pan.translation(in: playerLayer)
+            let offset = CGPoint(
+                x: videoZoomPanStartOffset.x + translation.x,
+                y: videoZoomPanStartOffset.y + translation.y
+            )
+            setVideoZoom(scale: videoZoomScale, offset: offset, animated: false)
+        case .ended, .cancelled, .failed:
+            isVideoZooming = false
+            setVideoZoom(scale: videoZoomScale, offset: videoZoomOffset, animated: true)
+        default:
+            break
+        }
+    }
+
     private func resetVideoZoom(animated: Bool) {
+        isVideoZooming = false
         setVideoZoom(scale: minimumVideoZoomScale, offset: .zero, animated: animated)
     }
 
@@ -350,6 +390,7 @@ extension IOSVideoPlayerView {
         videoZoomScale = clampedVideoZoomScale(scale)
         videoZoomOffset = clampedVideoZoomOffset(offset, scale: videoZoomScale)
         updateVideoZoomTransform(animated: animated)
+        notifyVideoZoomInteractionIfNeeded()
     }
 
     private func updateVideoZoomTransform(animated: Bool) {
@@ -404,6 +445,25 @@ extension IOSVideoPlayerView {
         )
     }
 
+    private func notifyVideoZoomInteractionIfNeeded() {
+        let isActive = isVideoZoomInteractionActive
+        guard isActive != wasVideoZoomInteractionActive else {
+            return
+        }
+        wasVideoZoomInteractionActive = isActive
+        updateVideoZoomGestureAvailability(isActive: isActive)
+        videoZoomInteractionDidChange?(isActive)
+    }
+
+    private func updateVideoZoomGestureAvailability(isActive: Bool) {
+        videoZoomPanGesture.isEnabled = isActive
+        if isActive {
+            panGesture.isEnabled = false
+        } else {
+            judgePanGesture()
+        }
+    }
+
     private func addNotification() {
         NotificationCenter.default.addObserver(self, selector: #selector(orientationChanged), name: UIApplication.didChangeStatusBarOrientationNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(routesAvailableDidChange), name: .AVRouteDetectorMultipleRoutesDetectedDidChange, object: nil)
@@ -422,6 +482,11 @@ extension IOSVideoPlayerView {
     }
 
     open func judgePanGesture() {
+        if isVideoZoomInteractionActive {
+            videoZoomPanGesture.isEnabled = true
+            panGesture.isEnabled = false
+            return
+        }
         if landscapeButton.isSelected || UIDevice.current.userInterfaceIdiom == .pad {
             panGesture.isEnabled = isPlayed && !replayButton.isSelected
         } else {
