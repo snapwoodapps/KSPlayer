@@ -24,6 +24,7 @@ public class PlayerToolBar: UIStackView {
     public let audioSwitchButton = UIButton()
     public let definitionButton = UIButton()
     public let pipButton = UIButton()
+    public let muteButton = UIButton()
     public var timeType = TimeType.minOrHour {
         didSet {
             if timeType != oldValue {
@@ -116,13 +117,26 @@ public class PlayerToolBar: UIStackView {
         } else {
             pipButton.setTitle(NSLocalizedString("pip", comment: ""), for: .normal)
         }
+        muteButton.tag = PlayerButtonType.mute.rawValue
+        muteButton.tintColor = .white
+        #if canImport(UIKit)
+        let muteSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: 20, weight: .semibold)
+        muteButton.setImage(UIImage(systemName: "speaker.wave.2.fill", withConfiguration: muteSymbolConfiguration), for: .normal)
+        muteButton.setImage(UIImage(systemName: "speaker.slash.fill", withConfiguration: muteSymbolConfiguration), for: .selected)
+        muteButton.accessibilityLabel = NSLocalizedString("mute", comment: "")
+        #else
+        muteButton.setTitle(NSLocalizedString("mute", comment: ""), for: .normal)
+        muteButton.setTitle(NSLocalizedString("unmute", comment: ""), for: .selected)
+        #endif
         playButton.translatesAutoresizingMaskIntoConstraints = false
         srtButton.translatesAutoresizingMaskIntoConstraints = false
+        muteButton.translatesAutoresizingMaskIntoConstraints = false
         translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             playButton.widthAnchor.constraint(equalToConstant: 30),
             heightAnchor.constraint(equalToConstant: 49),
             srtButton.widthAnchor.constraint(equalToConstant: 40),
+            muteButton.widthAnchor.constraint(equalToConstant: 36),
         ])
     }
 
@@ -139,6 +153,7 @@ public class PlayerToolBar: UIStackView {
         videoSwitchButton.addTarget(target, action: action, for: .primaryActionTriggered)
         srtButton.addTarget(target, action: action, for: .primaryActionTriggered)
         pipButton.addTarget(target, action: action, for: .primaryActionTriggered)
+        muteButton.addTarget(target, action: action, for: .primaryActionTriggered)
     }
 
     public func reset() {
@@ -147,6 +162,7 @@ public class PlayerToolBar: UIStackView {
         playButton.isSelected = false
         timeSlider.value = 0.0
         timeSlider.isPlayable = false
+        muteButton.isSelected = false
         playbackRateButton.setTitle(NSLocalizedString("speed", comment: ""), for: .normal)
     }
 }

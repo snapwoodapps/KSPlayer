@@ -25,6 +25,9 @@ public enum PlayerButtonType: Int {
     case pictureInPicture
     case audioSwitch
     case videoSwitch
+    case skipBackward
+    case skipForward
+    case mute
 }
 
 public protocol PlayerControllerDelegate: AnyObject {

@@ -29,6 +29,13 @@ extension UIActivityIndicatorView: LoadingIndector {}
 #endif
 
 open class VideoPlayerView: PlayerView {
+    private let skipBackwardInterval = TimeInterval(15)
+    private let skipForwardInterval = TimeInterval(30)
+    private let centerControlButtonSize = CGFloat(64)
+    private let skipControlButtonSize = CGFloat(58)
+    private let centerControlSpacing = CGFloat(30)
+    private let timelineThumbDiameter = CGFloat(20)
+    private let highlightedTimelineThumbDiameter = CGFloat(26)
     private var delayItem: DispatchWorkItem?
     /// Gesture used to show / hide control view
     public let tapGesture = UITapGestureRecognizer()
@@ -77,8 +84,6 @@ open class VideoPlayerView: PlayerView {
                 subtitleLabel.attributedText = nil
                 titleLabel.text = resource.name
                 toolBar.definitionButton.isHidden = resource.definitions.count < 2
-                autoFadeOutViewWithAnimation()
-                isMaskShow = true
                 MPNowPlayingInfoCenter.default().nowPlayingInfo = resource.nowPlayingInfo?.nowPlayingInfo
             }
         }
@@ -95,17 +100,19 @@ open class VideoPlayerView: PlayerView {
     public var loadingIndector: UIView & LoadingIndector = UIActivityIndicatorView(frame: CGRect(x: 0, y: 0, width: 30, height: 30))
     public var seekToView: UIView & SeekViewProtocol = SeekView()
     public var replayButton = UIButton()
+    public var skipBackwardButton = UIButton()
+    public var skipForwardButton = UIButton()
     public var lockButton = UIButton()
     public let srtControl = KSSubtitleController()
     public var isLock: Bool { lockButton.isSelected }
-    open var isMaskShow = true {
+    open var isMaskShow = false {
         didSet {
             let alpha: CGFloat = isMaskShow && !isLock ? 1.0 : 0.0
             UIView.animate(withDuration: 0.3) { [weak self] in
                 guard let self else { return }
-                if self.isPlayed {
-                    self.replayButton.alpha = self.isMaskShow ? 1.0 : 0.0
-                }
+                self.updateCenterPlaybackButton()
+                self.updateCenterSeekControls()
+                self.updateMuteButton()
                 self.lockButton.alpha = self.isMaskShow ? 1.0 : 0.0
                 self.topMaskView.alpha = alpha
                 self.bottomMaskView.alpha = alpha
@@ -159,6 +166,14 @@ open class VideoPlayerView: PlayerView {
                     button.isSelected = true
                 }
             }
+        } else if type == .skipBackward {
+            seekRelative(by: -skipBackwardInterval)
+        } else if type == .skipForward {
+            seekRelative(by: skipForwardInterval)
+        } else if type == .mute {
+            guard let player = playerLayer.player else { return }
+            player.isMuted.toggle()
+            updateMuteButton()
         } else if type == .audioSwitch || type == .videoSwitch {
             guard let tracks = playerLayer.player?.tracks(mediaType: type == .audioSwitch ? .audio : .video) else {
                 return
@@ -229,10 +244,17 @@ open class VideoPlayerView: PlayerView {
         replayButton.cornerRadius = 32
         replayButton.titleFont = .systemFont(ofSize: 16)
         replayButton.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        replayButton.tintColor = .white
         replayButton.setImage(KSPlayerManager.image(named: "KSPlayer_play"), for: .normal)
         replayButton.setImage(KSPlayerManager.image(named: "KSPlayer_replay"), for: .selected)
         replayButton.addTarget(self, action: #selector(onButtonPressed(_:)), for: .primaryActionTriggered)
-        replayButton.tag = PlayerButtonType.replay.rawValue
+        replayButton.tag = PlayerButtonType.play.rawValue
+        configureCenterControlButton(skipBackwardButton, type: .skipBackward, systemImageName: "gobackward.15", fallbackTitle: "15")
+        configureCenterControlButton(skipForwardButton, type: .skipForward, systemImageName: "goforward.30", fallbackTitle: "30")
+        skipBackwardButton.isHidden = true
+        skipForwardButton.isHidden = true
+        controllerView.addSubview(skipBackwardButton)
+        controllerView.addSubview(skipForwardButton)
         lockButton.backgroundColor = UIColor.black.withAlphaComponent(0.5)
         lockButton.cornerRadius = 32
         lockButton.setImage(KSPlayerManager.image(named: "KSPlayer_unlocking"), for: .normal)
@@ -244,6 +266,12 @@ open class VideoPlayerView: PlayerView {
         controllerView.addSubview(topMaskView)
         controllerView.addSubview(bottomMaskView)
         addConstraint()
+        topMaskView.alpha = 0.0
+        bottomMaskView.alpha = 0.0
+        replayButton.alpha = 0.0
+        skipBackwardButton.alpha = 0.0
+        skipForwardButton.alpha = 0.0
+        lockButton.alpha = 0.0
         customizeUIComponents()
         setupSrtControl()
         layoutIfNeeded()
@@ -264,6 +292,8 @@ open class VideoPlayerView: PlayerView {
     }
 
     override open func player(layer: KSPlayerLayer, currentTime: TimeInterval, totalTime: TimeInterval) {
+        updateSeekAvailability(for: layer.player)
+        updateMuteButton()
         guard !isSliderSliding else { return }
         super.player(layer: layer, currentTime: currentTime, totalTime: totalTime)
         if let subtitle = resource?.subtitle {
@@ -276,19 +306,17 @@ open class VideoPlayerView: PlayerView {
         super.player(layer: layer, state: state)
         switch state {
         case .readyToPlay:
-            toolBar.timeSlider.isPlayable = true
+            updateSeekAvailability(for: layer.player)
             embedSubtitleDataSouce = layer.player?.subtitleDataSouce
             toolBar.videoSwitchButton.isHidden = layer.player?.tracks(mediaType: .video).count ?? 1 < 2
             toolBar.audioSwitchButton.isHidden = layer.player?.tracks(mediaType: .audio).count ?? 1 < 2
         case .buffering:
             isPlayed = true
-            replayButton.isHidden = true
-            replayButton.isSelected = false
+            replayButton.isHidden = false
             showLoader()
         case .bufferFinished:
             isPlayed = true
-            replayButton.isHidden = true
-            replayButton.isSelected = false
+            replayButton.isHidden = false
             hideLoader()
             autoFadeOutViewWithAnimation()
         case .paused, .playedToTheEnd, .error:
@@ -303,6 +331,9 @@ open class VideoPlayerView: PlayerView {
         default:
             break
         }
+        updateCenterPlaybackButton()
+        updateMuteButton()
+        updateCenterSeekControls()
     }
 
     override open func resetPlayer() {
@@ -312,8 +343,10 @@ open class VideoPlayerView: PlayerView {
         toolBar.reset()
         isMaskShow = false
         hideLoader()
-        replayButton.isSelected = false
         replayButton.isHidden = false
+        updateCenterPlaybackButton()
+        skipBackwardButton.isHidden = true
+        skipForwardButton.isHidden = true
         seekToView.isHidden = true
         isPlayed = false
         embedSubtitleDataSouce = nil
@@ -554,6 +587,111 @@ extension VideoPlayerView {
         loadingIndector.stopAnimating()
     }
 
+    private func configureCenterControlButton(_ button: UIButton, type: PlayerButtonType, systemImageName: String, fallbackTitle: String) {
+        button.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        button.cornerRadius = skipControlButtonSize / 2
+        button.tintColor = .white
+        button.tag = type.rawValue
+        button.titleFont = .systemFont(ofSize: 16, weight: .semibold)
+        button.setTitleColor(.white, for: .normal)
+        button.addTarget(self, action: #selector(onButtonPressed(_:)), for: .primaryActionTriggered)
+        #if canImport(UIKit)
+        let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 28, weight: .semibold)
+        if let image = UIImage(systemName: systemImageName, withConfiguration: symbolConfiguration) {
+            button.setImage(image, for: .normal)
+        } else {
+            button.setTitle(fallbackTitle, for: .normal)
+        }
+        button.accessibilityLabel = type == .skipBackward ? "Skip back 15 seconds" : "Skip forward 30 seconds"
+        #else
+        button.setTitle(fallbackTitle, for: .normal)
+        #endif
+    }
+
+    private func seekRelative(by interval: TimeInterval) {
+        guard let player = playerLayer.player, player.seekable else {
+            updateSeekAvailability(for: playerLayer.player)
+            return
+        }
+        let currentTime = player.currentPlaybackTime.isFinite ? player.currentPlaybackTime : 0
+        let duration = max(totalTime, player.duration)
+        let unclampedTarget = currentTime + interval
+        let targetTime: TimeInterval
+        if duration.isFinite, duration > 0 {
+            targetTime = min(max(unclampedTarget, 0), duration)
+        } else {
+            targetTime = max(unclampedTarget, 0)
+        }
+        toolBar.currentTime = targetTime
+        seek(time: targetTime)
+    }
+
+    private func updateSeekAvailability(for player: MediaPlayerProtocol?) {
+        toolBar.timeSlider.isPlayable = player?.seekable == true
+        updateCenterSeekControls()
+    }
+
+    private func updateCenterPlaybackButton() {
+        let state = playerLayer.state
+        let alpha: CGFloat = isMaskShow && !isLock ? 1.0 : 0.0
+        replayButton.alpha = alpha
+        replayButton.isHidden = state == .notSetURL
+        if state == .playedToTheEnd {
+            replayButton.tag = PlayerButtonType.replay.rawValue
+            replayButton.setImage(KSPlayerManager.image(named: "KSPlayer_play"), for: .normal)
+            replayButton.isSelected = true
+        } else if state.isPlaying {
+            replayButton.tag = PlayerButtonType.pause.rawValue
+            replayButton.setImage(centerPauseImage(), for: .normal)
+            replayButton.isSelected = false
+        } else {
+            replayButton.tag = PlayerButtonType.play.rawValue
+            replayButton.setImage(KSPlayerManager.image(named: "KSPlayer_play"), for: .normal)
+            replayButton.isSelected = false
+        }
+    }
+
+    private func centerPauseImage() -> UIImage? {
+        #if canImport(UIKit)
+        let symbolConfiguration = UIImage.SymbolConfiguration(pointSize: 40, weight: .semibold)
+        return UIImage(systemName: "pause.fill", withConfiguration: symbolConfiguration) ?? KSPlayerManager.image(named: "toolbar_ic_pause")
+        #else
+        return KSPlayerManager.image(named: "toolbar_ic_pause")
+        #endif
+    }
+
+    private func updateCenterSeekControls() {
+        let isVisible = playerLayer.player?.seekable == true &&
+            !replayButton.isHidden &&
+            playerLayer.state != .notSetURL &&
+            playerLayer.state != .error
+        skipBackwardButton.isHidden = !isVisible
+        skipForwardButton.isHidden = !isVisible
+        let alpha: CGFloat = isVisible && isMaskShow && !isLock ? 1.0 : 0.0
+        skipBackwardButton.alpha = alpha
+        skipForwardButton.alpha = alpha
+    }
+
+    private func updateMuteButton() {
+        let isMuted = playerLayer.player?.isMuted ?? false
+        toolBar.muteButton.isSelected = isMuted
+        #if canImport(UIKit)
+        toolBar.muteButton.accessibilityLabel = isMuted ? NSLocalizedString("unmute", comment: "") : NSLocalizedString("mute", comment: "")
+        #endif
+    }
+
+    private func timelineThumbImage(diameter: CGFloat) -> UIImage? {
+        #if canImport(UIKit)
+        let size = CGSize(width: diameter, height: diameter)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            UIColor.white.setFill()
+            UIBezierPath(ovalIn: CGRect(origin: .zero, size: size)).fill()
+        }
+        #else
+        return nil
+        #endif
+    }
+
     open func showSubtile(from subtitle: KSSubtitleProtocol, at time: TimeInterval) {
         let time = time + (resource?.definitions[currentDefinition].options.subtitleDelay ?? 0.0)
         if let part = subtitle.search(for: time) {
@@ -575,8 +713,9 @@ extension VideoPlayerView {
         toolBar.playButton.tintColor = .white
         toolBar.playbackRateButton.tintColor = .white
         toolBar.definitionButton.tintColor = .white
-        toolBar.timeSlider.setThumbImage(KSPlayerManager.image(named: "KSPlayer_slider_thumb"), for: .normal)
-        toolBar.timeSlider.setThumbImage(KSPlayerManager.image(named: "KSPlayer_slider_thumb_pressed"), for: .highlighted)
+        toolBar.muteButton.tintColor = .white
+        toolBar.timeSlider.setThumbImage(timelineThumbImage(diameter: timelineThumbDiameter) ?? KSPlayerManager.image(named: "KSPlayer_slider_thumb"), for: .normal)
+        toolBar.timeSlider.setThumbImage(timelineThumbImage(diameter: highlightedTimelineThumbDiameter) ?? KSPlayerManager.image(named: "KSPlayer_slider_thumb_pressed"), for: .highlighted)
         bottomMaskView.addSubview(toolBar.timeSlider)
         toolBar.spacing = 10
         toolBar.addArrangedSubview(toolBar.playButton)
@@ -587,6 +726,7 @@ extension VideoPlayerView {
         toolBar.addArrangedSubview(toolBar.videoSwitchButton)
         toolBar.addArrangedSubview(toolBar.srtButton)
         toolBar.addArrangedSubview(toolBar.pipButton)
+        toolBar.addArrangedSubview(toolBar.muteButton)
         toolBar.audioSwitchButton.isHidden = true
         toolBar.videoSwitchButton.isHidden = true
         if #available(tvOS 14.0, *) {
@@ -608,6 +748,8 @@ extension VideoPlayerView {
         loadingIndector.translatesAutoresizingMaskIntoConstraints = false
         seekToView.translatesAutoresizingMaskIntoConstraints = false
         replayButton.translatesAutoresizingMaskIntoConstraints = false
+        skipBackwardButton.translatesAutoresizingMaskIntoConstraints = false
+        skipForwardButton.translatesAutoresizingMaskIntoConstraints = false
         playerLayer.translatesAutoresizingMaskIntoConstraints = false
         lockButton.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -650,6 +792,16 @@ extension VideoPlayerView {
             seekToView.heightAnchor.constraint(equalToConstant: 40),
             replayButton.centerYAnchor.constraint(equalTo: centerYAnchor),
             replayButton.centerXAnchor.constraint(equalTo: centerXAnchor),
+            replayButton.widthAnchor.constraint(equalToConstant: centerControlButtonSize),
+            replayButton.heightAnchor.constraint(equalToConstant: centerControlButtonSize),
+            skipBackwardButton.centerYAnchor.constraint(equalTo: replayButton.centerYAnchor),
+            skipBackwardButton.trailingAnchor.constraint(equalTo: replayButton.leadingAnchor, constant: -centerControlSpacing),
+            skipBackwardButton.widthAnchor.constraint(equalToConstant: skipControlButtonSize),
+            skipBackwardButton.heightAnchor.constraint(equalToConstant: skipControlButtonSize),
+            skipForwardButton.centerYAnchor.constraint(equalTo: replayButton.centerYAnchor),
+            skipForwardButton.leadingAnchor.constraint(equalTo: replayButton.trailingAnchor, constant: centerControlSpacing),
+            skipForwardButton.widthAnchor.constraint(equalToConstant: skipControlButtonSize),
+            skipForwardButton.heightAnchor.constraint(equalToConstant: skipControlButtonSize),
             lockButton.leadingAnchor.constraint(equalTo: safeLeadingAnchor, constant: 22),
             lockButton.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])

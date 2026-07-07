@@ -13,6 +13,7 @@ public class KSSlider: UXSlider {
     weak var delegate: KSSliderDelegate?
     public var trackHeigt = CGFloat(2)
     public var isPlayable = false
+    private let touchExpansion = CGFloat(20)
     override public init(frame: CGRect) {
         super.init(frame: frame)
         tapGesture = UITapGestureRecognizer(target: self, action: #selector(actionTapGesture(sender:)))
@@ -31,14 +32,17 @@ public class KSSlider: UXSlider {
 
     override open func trackRect(forBounds bounds: CGRect) -> CGRect {
         var customBounds = super.trackRect(forBounds: bounds)
-        customBounds.origin.y -= trackHeigt / 2
+        customBounds.origin.y = bounds.midY - trackHeigt / 2
         customBounds.size.height = trackHeigt
         return customBounds
     }
 
     override open func thumbRect(forBounds bounds: CGRect, trackRect rect: CGRect, value: Float) -> CGRect {
-        let rect = super.thumbRect(forBounds: bounds, trackRect: rect, value: value)
-        return rect.insetBy(dx: -20, dy: -20)
+        super.thumbRect(forBounds: bounds, trackRect: rect, value: value)
+    }
+
+    override open func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        bounds.insetBy(dx: -touchExpansion, dy: -touchExpansion).contains(point)
     }
 
     // MARK: - handle UI slider actions
@@ -64,22 +68,20 @@ public class KSSlider: UXSlider {
     }
 
     @objc private func actionTapGesture(sender: UITapGestureRecognizer) {
-        //        guard isPlayable else {
-        //            return
-        //        }
-        let touchPoint = sender.location(in: self)
-        let value = (maximumValue - minimumValue) * Float(touchPoint.x / frame.size.width)
+        guard isPlayable else {
+            return
+        }
+        let value = sliderValue(at: sender.location(in: self))
         self.value = value
         delegate?.slider(value: Double(value), event: .valueChanged)
         delegate?.slider(value: Double(value), event: .touchUpInside)
     }
 
     @objc private func actionPanGesture(sender: UIPanGestureRecognizer) {
-        //        guard isPlayable else {
-        //            return
-        //        }
-        let touchPoint = sender.location(in: self)
-        let value = (maximumValue - minimumValue) * Float(touchPoint.x / frame.size.width)
+        guard isPlayable else {
+            return
+        }
+        let value = sliderValue(at: sender.location(in: self))
         self.value = value
         if sender.state == .began {
             delegate?.slider(value: Double(value), event: .touchDown)
@@ -88,6 +90,12 @@ public class KSSlider: UXSlider {
         } else {
             delegate?.slider(value: Double(value), event: .valueChanged)
         }
+    }
+
+    private func sliderValue(at point: CGPoint) -> Float {
+        guard bounds.width > 0 else { return minimumValue }
+        let progress = min(max(point.x / bounds.width, 0), 1)
+        return minimumValue + (maximumValue - minimumValue) * Float(progress)
     }
 }
 
