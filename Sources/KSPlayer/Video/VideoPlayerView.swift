@@ -37,6 +37,8 @@ open class VideoPlayerView: PlayerView {
     private let timelineThumbDiameter = CGFloat(20)
     private let highlightedTimelineThumbDiameter = CGFloat(26)
     private var delayItem: DispatchWorkItem?
+    private var pendingRelativeSeekTargetTime: TimeInterval?
+    private var activeRelativeSeekTargetTime: TimeInterval?
     /// Gesture used to show / hide control view
     public let tapGesture = UITapGestureRecognizer()
     public let doubleTapGesture = UITapGestureRecognizer()
@@ -295,8 +297,12 @@ open class VideoPlayerView: PlayerView {
         updateSeekAvailability(for: layer.player)
         updateMuteButton()
         guard !isSliderSliding else { return }
-        super.player(layer: layer, currentTime: currentTime, totalTime: totalTime)
-        if let subtitle = resource?.subtitle {
+        if let pendingRelativeSeekTargetTime {
+            toolBar.currentTime = pendingRelativeSeekTargetTime
+        } else {
+            super.player(layer: layer, currentTime: currentTime, totalTime: totalTime)
+        }
+        if pendingRelativeSeekTargetTime == nil, let subtitle = resource?.subtitle {
             showSubtile(from: subtitle, at: currentTime)
             subtitleBackView.isHidden = false
         }
@@ -339,6 +345,7 @@ open class VideoPlayerView: PlayerView {
     override open func resetPlayer() {
         super.resetPlayer()
         delayItem = nil
+        clearRelativeSeekState()
         resource = nil
         toolBar.reset()
         isMaskShow = false
@@ -357,6 +364,7 @@ open class VideoPlayerView: PlayerView {
     // MARK: - KSSliderDelegate
 
     override open func slider(value: Double, event: ControlEvents) {
+        clearRelativeSeekState()
         if event == .valueChanged {
             delayItem?.cancel()
         } else if event == .touchUpInside {
@@ -385,6 +393,7 @@ open class VideoPlayerView: PlayerView {
     }
 
     open func set(resource: KSPlayerResource, definitionIndex: Int = 0, isSetUrl: Bool = true) {
+        clearRelativeSeekState()
         self.resource = resource
         currentDefinition = definitionIndex >= resource.definitions.count ? resource.definitions.count - 1 : definitionIndex
         if isSetUrl {
@@ -610,20 +619,55 @@ extension VideoPlayerView {
 
     private func seekRelative(by interval: TimeInterval) {
         guard let player = playerLayer.player, player.seekable else {
+            clearRelativeSeekState()
             updateSeekAvailability(for: playerLayer.player)
             return
         }
         let currentTime = player.currentPlaybackTime.isFinite ? player.currentPlaybackTime : 0
+        let baseTime = pendingRelativeSeekTargetTime ?? activeRelativeSeekTargetTime ?? currentTime
         let duration = max(totalTime, player.duration)
-        let unclampedTarget = currentTime + interval
+        let unclampedTarget = baseTime + interval
         let targetTime: TimeInterval
         if duration.isFinite, duration > 0 {
             targetTime = min(max(unclampedTarget, 0), duration)
         } else {
             targetTime = max(unclampedTarget, 0)
         }
+        pendingRelativeSeekTargetTime = targetTime
         toolBar.currentTime = targetTime
-        seek(time: targetTime)
+        dispatchPendingRelativeSeekIfNeeded()
+    }
+
+    private func dispatchPendingRelativeSeekIfNeeded() {
+        guard activeRelativeSeekTargetTime == nil, let targetTime = pendingRelativeSeekTargetTime else {
+            return
+        }
+
+        activeRelativeSeekTargetTime = targetTime
+        seek(time: targetTime) { [weak self] _ in
+            guard let self else {
+                return
+            }
+
+            if self.activeRelativeSeekTargetTime == targetTime {
+                self.activeRelativeSeekTargetTime = nil
+            }
+
+            guard let pendingTargetTime = self.pendingRelativeSeekTargetTime else {
+                return
+            }
+
+            if pendingTargetTime == targetTime {
+                self.pendingRelativeSeekTargetTime = nil
+            } else {
+                self.dispatchPendingRelativeSeekIfNeeded()
+            }
+        }
+    }
+
+    private func clearRelativeSeekState() {
+        pendingRelativeSeekTargetTime = nil
+        activeRelativeSeekTargetTime = nil
     }
 
     private func updateSeekAvailability(for player: MediaPlayerProtocol?) {
