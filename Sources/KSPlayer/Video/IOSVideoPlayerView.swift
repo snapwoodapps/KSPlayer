@@ -20,6 +20,14 @@ open class IOSVideoPlayerView: VideoPlayerView {
     private var isPlayingForCall = false
 //    private let callCenter = CXCallObserver()
     private var isVolume = false
+    private let pinchGesture = UIPinchGestureRecognizer()
+    private let minimumVideoZoomScale = CGFloat(1.0)
+    private let maximumVideoZoomScale = CGFloat(5.0)
+    private var videoZoomScale = CGFloat(1.0)
+    private var videoZoomOffset = CGPoint.zero
+    private var pinchStartZoomScale = CGFloat(1.0)
+    private var pinchStartZoomOffset = CGPoint.zero
+    private var pinchStartLocation = CGPoint.zero
 //    private let volumeView = BrightnessVolume()
     private var cancellable: AnyCancellable?
     public var volumeViewSlider = UXSlider()
@@ -41,8 +49,19 @@ open class IOSVideoPlayerView: VideoPlayerView {
         cancellable = nil
     }
 
+    override open func layoutSubviews() {
+        super.layoutSubviews()
+        videoZoomOffset = clampedVideoZoomOffset(videoZoomOffset, scale: videoZoomScale)
+        updateVideoZoomTransform(animated: false)
+    }
+
     override open func customizeUIComponents() {
         super.customizeUIComponents()
+        playerLayer.clipsToBounds = true
+        panGesture.maximumNumberOfTouches = 1
+        pinchGesture.addTarget(self, action: #selector(pinchGestureAction(_:)))
+        pinchGesture.cancelsTouchesInView = false
+        controllerView.addGestureRecognizer(pinchGesture)
         if UIDevice.current.userInterfaceIdiom == .phone {
             subtitleLabel.font = .systemFont(ofSize: 14)
         }
@@ -93,6 +112,7 @@ open class IOSVideoPlayerView: VideoPlayerView {
 
     override open func resetPlayer() {
         super.resetPlayer()
+        resetVideoZoom(animated: false)
         maskImageView.alpha = 1
         maskImageView.image = nil
         panGesture.isEnabled = false
@@ -200,6 +220,7 @@ open class IOSVideoPlayerView: VideoPlayerView {
     override open func player(layer: KSPlayerLayer, state: KSPlayerState) {
         super.player(layer: layer, state: state)
         if state == .readyToPlay {
+            updateVideoZoomTransform(animated: false)
             UIView.animate(withDuration: 0.3) {
                 self.maskImageView.alpha = 0.0
             }
@@ -213,6 +234,7 @@ open class IOSVideoPlayerView: VideoPlayerView {
     }
 
     override open func set(resource: KSPlayerResource, definitionIndex: Int = 0, isSetUrl: Bool = true) {
+        resetVideoZoom(animated: false)
         super.set(resource: resource, definitionIndex: definitionIndex, isSetUrl: isSetUrl)
         maskImageView.image(url: resource.cover)
     }
@@ -296,6 +318,92 @@ extension IOSVideoPlayerView: UIViewControllerTransitioningDelegate {
 // MARK: - private functions
 
 extension IOSVideoPlayerView {
+    @objc private func pinchGestureAction(_ pinch: UIPinchGestureRecognizer) {
+        guard !isLock, playerLayer.player?.view != nil else {
+            return
+        }
+        switch pinch.state {
+        case .began:
+            pinchStartZoomScale = videoZoomScale
+            pinchStartZoomOffset = videoZoomOffset
+            pinchStartLocation = pinch.location(in: playerLayer)
+        case .changed:
+            let scale = clampedVideoZoomScale(pinchStartZoomScale * pinch.scale)
+            let offset = videoZoomOffset(for: scale, location: pinch.location(in: playerLayer))
+            setVideoZoom(scale: scale, offset: offset, animated: false)
+        case .ended, .cancelled, .failed:
+            if videoZoomScale <= minimumVideoZoomScale + 0.01 {
+                resetVideoZoom(animated: true)
+            } else {
+                setVideoZoom(scale: videoZoomScale, offset: videoZoomOffset, animated: true)
+            }
+        default:
+            break
+        }
+    }
+
+    private func resetVideoZoom(animated: Bool) {
+        setVideoZoom(scale: minimumVideoZoomScale, offset: .zero, animated: animated)
+    }
+
+    private func setVideoZoom(scale: CGFloat, offset: CGPoint, animated: Bool) {
+        videoZoomScale = clampedVideoZoomScale(scale)
+        videoZoomOffset = clampedVideoZoomOffset(offset, scale: videoZoomScale)
+        updateVideoZoomTransform(animated: animated)
+    }
+
+    private func updateVideoZoomTransform(animated: Bool) {
+        guard let videoView = playerLayer.player?.view else {
+            return
+        }
+        let transform: CGAffineTransform
+        if videoZoomScale <= minimumVideoZoomScale + 0.01 {
+            transform = .identity
+        } else {
+            transform = CGAffineTransform(a: videoZoomScale, b: 0, c: 0, d: videoZoomScale, tx: videoZoomOffset.x, ty: videoZoomOffset.y)
+        }
+        let animations = {
+            videoView.transform = transform
+        }
+        if animated {
+            UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState], animations: animations)
+        } else {
+            animations()
+        }
+    }
+
+    private func videoZoomOffset(for scale: CGFloat, location: CGPoint) -> CGPoint {
+        let startScale = max(pinchStartZoomScale, minimumVideoZoomScale)
+        let ratio = scale / startScale
+        let center = CGPoint(x: playerLayer.bounds.midX, y: playerLayer.bounds.midY)
+        let startVector = CGPoint(x: pinchStartLocation.x - center.x, y: pinchStartLocation.y - center.y)
+        let locationDelta = CGPoint(x: location.x - pinchStartLocation.x, y: location.y - pinchStartLocation.y)
+        let offset = CGPoint(
+            x: pinchStartZoomOffset.x * ratio + startVector.x * (1 - ratio) + locationDelta.x,
+            y: pinchStartZoomOffset.y * ratio + startVector.y * (1 - ratio) + locationDelta.y
+        )
+        return clampedVideoZoomOffset(offset, scale: scale)
+    }
+
+    private func clampedVideoZoomScale(_ scale: CGFloat) -> CGFloat {
+        guard scale.isFinite else {
+            return minimumVideoZoomScale
+        }
+        return min(max(scale, minimumVideoZoomScale), maximumVideoZoomScale)
+    }
+
+    private func clampedVideoZoomOffset(_ offset: CGPoint, scale: CGFloat) -> CGPoint {
+        guard scale > minimumVideoZoomScale else {
+            return .zero
+        }
+        let maxX = max(playerLayer.bounds.width * (scale - 1) / 2, 0)
+        let maxY = max(playerLayer.bounds.height * (scale - 1) / 2, 0)
+        return CGPoint(
+            x: min(max(offset.x, -maxX), maxX),
+            y: min(max(offset.y, -maxY), maxY)
+        )
+    }
+
     private func addNotification() {
         NotificationCenter.default.addObserver(self, selector: #selector(orientationChanged), name: UIApplication.didChangeStatusBarOrientationNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(routesAvailableDidChange), name: .AVRouteDetectorMultipleRoutesDetectedDidChange, object: nil)
