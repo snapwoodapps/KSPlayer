@@ -64,6 +64,7 @@ open class IOSVideoPlayerView: VideoPlayerView {
 
     override open func customizeUIComponents() {
         super.customizeUIComponents()
+        clipsToBounds = true
         playerLayer.clipsToBounds = true
         panGesture.maximumNumberOfTouches = 1
         pinchGesture.addTarget(self, action: #selector(pinchGestureAction(_:)))
@@ -339,11 +340,11 @@ extension IOSVideoPlayerView {
             isVideoZooming = true
             pinchStartZoomScale = videoZoomScale
             pinchStartZoomOffset = videoZoomOffset
-            pinchStartLocation = pinch.location(in: playerLayer)
+            pinchStartLocation = pinch.location(in: self)
             notifyVideoZoomInteractionIfNeeded()
         case .changed:
             let scale = clampedVideoZoomScale(pinchStartZoomScale * pinch.scale)
-            let offset = videoZoomOffset(for: scale, location: pinch.location(in: playerLayer))
+            let offset = videoZoomOffset(for: scale, location: pinch.location(in: self))
             setVideoZoom(scale: scale, offset: offset, animated: false)
         case .ended, .cancelled, .failed:
             isVideoZooming = false
@@ -367,7 +368,7 @@ extension IOSVideoPlayerView {
             videoZoomPanStartOffset = videoZoomOffset
             notifyVideoZoomInteractionIfNeeded()
         case .changed:
-            let translation = pan.translation(in: playerLayer)
+            let translation = pan.translation(in: self)
             let offset = CGPoint(
                 x: videoZoomPanStartOffset.x + translation.x,
                 y: videoZoomPanStartOffset.y + translation.y
@@ -394,9 +395,6 @@ extension IOSVideoPlayerView {
     }
 
     private func updateVideoZoomTransform(animated: Bool) {
-        guard let videoView = playerLayer.player?.view else {
-            return
-        }
         let transform: CGAffineTransform
         if videoZoomScale <= minimumVideoZoomScale + 0.01 {
             transform = .identity
@@ -404,7 +402,10 @@ extension IOSVideoPlayerView {
             transform = CGAffineTransform(a: videoZoomScale, b: 0, c: 0, d: videoZoomScale, tx: videoZoomOffset.x, ty: videoZoomOffset.y)
         }
         let animations = {
-            videoView.transform = transform
+            // The decoded video view owns format-specific transforms such as
+            // FFmpeg display-matrix rotation. Zoom its container so resetting
+            // zoom cannot discard that presentation metadata.
+            self.playerLayer.transform = transform
         }
         if animated {
             UIView.animate(withDuration: 0.2, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState], animations: animations)
@@ -416,7 +417,7 @@ extension IOSVideoPlayerView {
     private func videoZoomOffset(for scale: CGFloat, location: CGPoint) -> CGPoint {
         let startScale = max(pinchStartZoomScale, minimumVideoZoomScale)
         let ratio = scale / startScale
-        let center = CGPoint(x: playerLayer.bounds.midX, y: playerLayer.bounds.midY)
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
         let startVector = CGPoint(x: pinchStartLocation.x - center.x, y: pinchStartLocation.y - center.y)
         let locationDelta = CGPoint(x: location.x - pinchStartLocation.x, y: location.y - pinchStartLocation.y)
         let offset = CGPoint(
@@ -437,8 +438,8 @@ extension IOSVideoPlayerView {
         guard scale > minimumVideoZoomScale else {
             return .zero
         }
-        let maxX = max(playerLayer.bounds.width * (scale - 1) / 2, 0)
-        let maxY = max(playerLayer.bounds.height * (scale - 1) / 2, 0)
+        let maxX = max(bounds.width * (scale - 1) / 2, 0)
+        let maxY = max(bounds.height * (scale - 1) / 2, 0)
         return CGPoint(
             x: min(max(offset.x, -maxX), maxX),
             y: min(max(offset.y, -maxY), maxY)

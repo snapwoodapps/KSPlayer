@@ -15,9 +15,12 @@ import AppKit
 
 public class KSMEPlayer: NSObject {
     private var loopCount = 1
-    private let audioOutput = AudioEnginePlayer()
+    private var audioOutput: AudioEnginePlayer?
     private var playerItem: MEPlayerItem
     private let videoOutput: MetalPlayView
+    #if canImport(UIKit)
+    private let videoContainer: RotatedVideoContainerView
+    #endif
     private var options: KSOptions
     private var bufferingCountDownTimer: Timer?
     public private(set) var bufferingProgress = 0 {
@@ -65,7 +68,7 @@ public class KSMEPlayer: NSObject {
 
     public var playbackRate: Float = 1 {
         didSet {
-            audioOutput.playbackRate = playbackRate
+            audioOutput?.playbackRate = playbackRate
         }
     }
 
@@ -89,12 +92,16 @@ public class KSMEPlayer: NSObject {
     }
 
     public required init(url: URL, options: KSOptions) {
+        audioOutput = options.audioDisable ? nil : AudioEnginePlayer()
         playerItem = MEPlayerItem(url: url, options: options)
         videoOutput = MetalPlayView(options: options)
+        #if canImport(UIKit)
+        videoContainer = RotatedVideoContainerView(contentView: videoOutput)
+        #endif
         self.options = options
         super.init()
         playerItem.delegate = self
-        audioOutput.renderSource = playerItem
+        audioOutput?.renderSource = playerItem
         videoOutput.renderSource = playerItem
     }
 
@@ -103,7 +110,7 @@ public class KSMEPlayer: NSObject {
         bufferingCountDownTimer = nil
         
         // Break any strong references from renderers to the item
-        audioOutput.renderSource = nil
+        audioOutput?.renderSource = nil
         videoOutput.renderSource = nil
         videoOutput.isPaused = true
         
@@ -120,7 +127,7 @@ extension KSMEPlayer {
         runInMainqueue { [weak self] in
             guard let self = self else { return }
             let isPaused = !(self.playbackState == .playing && self.loadState == .playable)
-            self.audioOutput.isPaused = isPaused
+            self.audioOutput?.isPaused = isPaused
             self.videoOutput.isPaused = isPaused
             self.delegate?.changeLoadState(player: self)
         }
@@ -133,7 +140,12 @@ extension KSMEPlayer: MEPlayerDelegate {
         runInMainqueue { [weak self] in
             guard let self = self else { return }
             self.videoOutput.drawableSize = self.naturalSize
-            self.view.centerRotate(byDegrees: self.playerItem.rotation)
+            #if canImport(UIKit)
+            self.videoContainer.rotationDegrees = self.playerItem.rotation
+            self.videoContainer.layoutIfNeeded()
+            #else
+            self.videoOutput.centerRotate(byDegrees: self.playerItem.rotation)
+            #endif
             self.videoOutput.isPaused = false
             self.delegate?.preparedToPlay(player: self)
         }
@@ -153,12 +165,12 @@ extension KSMEPlayer: MEPlayerDelegate {
                 if self.options.isLoopPlay {
                     self.loopCount += 1
                     self.delegate?.playBack(player: self, loopCount: self.loopCount)
-                    self.audioOutput.isPaused = false
+                    self.audioOutput?.isPaused = false
                     self.videoOutput.isPaused = false
                 } else {
                     self.playbackState = .finished
                     if type == .audio {
-                        self.audioOutput.isPaused = true
+                        self.audioOutput?.isPaused = true
                     } else if type == .video {
                         self.videoOutput.isPaused = true
                     }
@@ -207,79 +219,102 @@ extension KSMEPlayer: MEPlayerDelegate {
 extension KSMEPlayer: MediaPlayerProtocol {
     public var playbackVolume: Float {
         get {
-            audioOutput.volume
+            audioOutput?.volume ?? 0
         }
         set {
-            audioOutput.volume = newValue
+            audioOutput?.volume = newValue
         }
     }
 
     public var attackTime: Float {
         get {
-            audioOutput.attackTime
+            audioOutput?.attackTime ?? 1
         }
         set {
-            audioOutput.attackTime = newValue
+            audioOutput?.attackTime = newValue
         }
     }
 
     public var releaseTime: Float {
         get {
-            audioOutput.releaseTime
+            audioOutput?.releaseTime ?? 1
         }
         set {
-            audioOutput.releaseTime = newValue
+            audioOutput?.releaseTime = newValue
         }
     }
 
     public var threshold: Float {
         get {
-            audioOutput.threshold
+            audioOutput?.threshold ?? 1
         }
         set {
-            audioOutput.threshold = newValue
+            audioOutput?.threshold = newValue
         }
     }
 
     public var expansionRatio: Float {
         get {
-            audioOutput.expansionRatio
+            audioOutput?.expansionRatio ?? 1
         }
         set {
-            audioOutput.expansionRatio = newValue
+            audioOutput?.expansionRatio = newValue
         }
     }
 
     public var overallGain: Float {
         get {
-            audioOutput.overallGain
+            audioOutput?.overallGain ?? 1
         }
         set {
-            audioOutput.overallGain = newValue
+            audioOutput?.overallGain = newValue
         }
     }
 
     public var isPlaying: Bool { playbackState == .playing }
 
     public var naturalSize: CGSize {
-        options.display == .plane ? (playerItem.rotation == 90 || playerItem.rotation == 270 ? playerItem.naturalSize.reverse : playerItem.naturalSize) : UIScreen.size
+        let swapsAxes: Bool
+        #if canImport(UIKit)
+        swapsAxes = RotatedVideoContainerView.rotationSwapsAxes(playerItem.rotation)
+        #else
+        swapsAxes = playerItem.rotation == 90 || playerItem.rotation == 270
+        #endif
+        return options.display == .plane ? (swapsAxes ? playerItem.naturalSize.reverse : playerItem.naturalSize) : UIScreen.size
     }
 
     public var isExternalPlaybackActive: Bool { false }
 
-    public var view: UIView { videoOutput }
+    public var view: UIView {
+        #if canImport(UIKit)
+        videoContainer
+        #else
+        videoOutput
+        #endif
+    }
 
     public func replace(url: URL, options: KSOptions) {
         KSLog("replaceUrl \(self)")
         shutdown()
         playerItem.delegate = nil
+        audioOutput?.renderSource = nil
+        if options.audioDisable {
+            audioOutput = nil
+        } else if audioOutput == nil {
+            audioOutput = AudioEnginePlayer()
+        }
         playerItem = MEPlayerItem(url: url, options: options)
         self.options = options
         playerItem.delegate = self
-        audioOutput.renderSource = playerItem
+        audioOutput?.renderSource = playerItem
         videoOutput.renderSource = playerItem
         videoOutput.options = options
         videoOutput.clear()
+        #if canImport(UIKit)
+        videoContainer.rotationDegrees = 0
+        #else
+        videoOutput.centerRotate(byDegrees: 0)
+        #endif
     }
 
     public var currentPlaybackTime: TimeInterval {
@@ -368,10 +403,10 @@ extension KSMEPlayer: MediaPlayerProtocol {
 
     public var isMuted: Bool {
         get {
-            audioOutput.isMuted
+            audioOutput?.isMuted ?? true
         }
         set {
-            audioOutput.isMuted = newValue
+            audioOutput?.isMuted = newValue
         }
     }
 

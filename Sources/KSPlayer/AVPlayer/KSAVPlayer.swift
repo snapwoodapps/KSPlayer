@@ -372,7 +372,13 @@ extension KSAVPlayer: MediaPlayerProtocol {
     public var isExternalPlaybackActive: Bool { player.isExternalPlaybackActive }
 
     public var naturalSize: CGSize {
-        urlAsset.tracks(withMediaType: .video).first { $0.isEnabled }?.naturalSize ?? .zero
+        let presentationSize = player.currentItem?.presentationSize ?? .zero
+        if presentationSize.width > 0, presentationSize.height > 0,
+           presentationSize.width.isFinite, presentationSize.height.isFinite {
+            return presentationSize
+        }
+
+        return urlAsset.tracks(withMediaType: .video).first { $0.isEnabled }?.naturalSize ?? .zero
     }
 
     public var currentPlaybackTime: TimeInterval {
