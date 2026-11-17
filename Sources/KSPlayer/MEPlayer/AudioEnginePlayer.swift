@@ -77,6 +77,12 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
     }
 
     private let engine = AVAudioEngine()
+    private var sourceNode: AVAudioSourceNode?
+    private var latencyObservers = [NSObjectProtocol]()
+    private let timingLock = NSLock()
+    private var audioTiming = (latency: 0.0, rate: 1.0)
+    // Accessed only by the audio render callback.
+    private var renderTiming = (latency: 0.0, rate: 1.0)
 
 //    private let reverb = AVAudioUnitReverb()
 //    private let nbandEQ = AVAudioUnitEQ()
@@ -108,6 +114,7 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
             } else {
                 if !engine.isRunning {
                     try? engine.start()
+                    updateOutputLatency()
                 }
             }
         }
@@ -118,7 +125,11 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
             engine.mainMixerNode.rate
         }
         set {
-            engine.mainMixerNode.rate = min(2, max(0.5, newValue))
+            let rate = min(2, max(0.5, newValue))
+            engine.mainMixerNode.rate = rate
+            timingLock.lock()
+            audioTiming.rate = Double(rate)
+            timingLock.unlock()
         }
     }
 
@@ -181,6 +192,7 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
             
             engine.attach(sourceNode)
             engine.connect(nodes: [sourceNode, dynamicsProcessor, engine.mainMixerNode, engine.outputNode], format: format)
+            self.sourceNode = sourceNode
         } catch {
             isMuted = true
         }
@@ -189,6 +201,34 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
             addRenderNotify(audioUnit: audioUnit)
         }
         engine.prepare()
+        updateOutputLatency()
+        latencyObservers.append(NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            self?.updateOutputLatency()
+        })
+        #if !os(macOS)
+        latencyObservers.append(NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.updateOutputLatency()
+        })
+        #endif
+    }
+
+    deinit {
+        for observer in latencyObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+    }
+
+    private func updateOutputLatency() {
+        // The source node includes downstream processing and device latency.
+        // Query the graph/session off the real-time render thread and refresh on
+        // engine starts and route changes (including Bluetooth connections).
+        var latency = sourceNode?.outputPresentationLatency ?? 0
+        #if !os(macOS)
+        latency = max(latency, AVAudioSession.sharedInstance().outputLatency)
+        #endif
+        timingLock.lock()
+        audioTiming.latency = latency.isFinite ? max(latency, 0) : 0
+        timingLock.unlock()
     }
 
     private func addRenderNotify(audioUnit: AudioUnit) {
@@ -258,10 +298,18 @@ public final class AudioEnginePlayer: AudioPlayer, FrameOutput {
     }
 
     private func audioPlayerDidRenderSample(sampleTimestamp _: AudioTimeStamp) {
+        // Never wait on the control thread from an audio callback. A contended
+        // update takes effect on the next render instead.
+        if timingLock.try() {
+            renderTiming = audioTiming
+            timingLock.unlock()
+        }
         if let currentRender = currentRender {
             let currentPreparePosition = currentRender.position + currentRender.duration * Int64(currentRenderReadOffset) / Int64(currentRender.numberOfSamples)
             if currentPreparePosition > 0 {
-                renderSource?.setAudio(time: currentRender.timebase.cmtime(for: currentPreparePosition))
+                let renderedTime = currentRender.timebase.cmtime(for: currentPreparePosition)
+                let latency = CMTime(seconds: renderTiming.latency * renderTiming.rate, preferredTimescale: 1_000_000_000)
+                renderSource?.setAudio(time: renderedTime - latency, rate: renderTiming.rate)
             }
         }
     }

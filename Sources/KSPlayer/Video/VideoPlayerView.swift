@@ -100,6 +100,7 @@ open class VideoPlayerView: PlayerView {
     private var subtitleEndTime = TimeInterval(0)
     /// Activty Indector for loading
     public var loadingIndector: UIView & LoadingIndector = UIActivityIndicatorView(frame: CGRect(x: 0, y: 0, width: 30, height: 30))
+    private let loadingBackgroundView = UIView()
     public var seekToView: UIView & SeekViewProtocol = SeekView()
     public var replayButton = UIButton()
     public var skipBackwardButton = UIButton()
@@ -232,7 +233,19 @@ open class VideoPlayerView: PlayerView {
         bottomMaskView.gradientLayer.endPoint = .zero
 
         loadingIndector.isHidden = true
-        controllerView.addSubview(loadingIndector)
+        loadingBackgroundView.isHidden = true
+        loadingBackgroundView.backgroundColor = UIColor.black.withAlphaComponent(0.75)
+        loadingBackgroundView.cornerRadius = 12
+        #if canImport(UIKit)
+        loadingBackgroundView.isUserInteractionEnabled = false
+        if let indicator = loadingIndector as? UIActivityIndicatorView {
+            indicator.style = .large
+            indicator.color = .white
+        }
+        #endif
+        // Keep buffering feedback above the controls and independent of their fade.
+        addSubview(loadingBackgroundView)
+        loadingBackgroundView.addSubview(loadingIndector)
         // Top views
         topMaskView.addSubview(navigationBar)
         navigationBar.addArrangedSubview(titleLabel)
@@ -587,11 +600,13 @@ extension VideoPlayerView {
     }
 
     private func showLoader() {
+        loadingBackgroundView.isHidden = false
         loadingIndector.isHidden = false
         loadingIndector.startAnimating()
     }
 
     private func hideLoader() {
+        loadingBackgroundView.isHidden = true
         loadingIndector.isHidden = true
         loadingIndector.stopAnimating()
     }
@@ -790,6 +805,7 @@ extension VideoPlayerView {
         navigationBar.translatesAutoresizingMaskIntoConstraints = false
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         loadingIndector.translatesAutoresizingMaskIntoConstraints = false
+        loadingBackgroundView.translatesAutoresizingMaskIntoConstraints = false
         seekToView.translatesAutoresizingMaskIntoConstraints = false
         replayButton.translatesAutoresizingMaskIntoConstraints = false
         skipBackwardButton.translatesAutoresizingMaskIntoConstraints = false
@@ -812,8 +828,6 @@ extension VideoPlayerView {
             topMaskView.topAnchor.constraint(equalTo: topAnchor),
             topMaskView.leadingAnchor.constraint(equalTo: leadingAnchor),
             topMaskView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            topMaskView.heightAnchor.constraint(equalToConstant: 105),
-            navigationBar.topAnchor.constraint(equalTo: topMaskView.topAnchor),
             navigationBar.leadingAnchor.constraint(equalTo: topMaskView.safeLeadingAnchor, constant: 15),
             navigationBar.trailingAnchor.constraint(equalTo: topMaskView.safeTrailingAnchor, constant: -15),
             navigationBar.heightAnchor.constraint(equalToConstant: 44),
@@ -828,8 +842,12 @@ extension VideoPlayerView {
             toolBar.timeSlider.leadingAnchor.constraint(equalTo: bottomMaskView.safeLeadingAnchor, constant: 15),
             toolBar.timeSlider.trailingAnchor.constraint(equalTo: bottomMaskView.safeTrailingAnchor, constant: -15),
             toolBar.timeSlider.heightAnchor.constraint(equalToConstant: 30),
-            loadingIndector.centerYAnchor.constraint(equalTo: centerYAnchor),
-            loadingIndector.centerXAnchor.constraint(equalTo: centerXAnchor),
+            loadingBackgroundView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            loadingBackgroundView.bottomAnchor.constraint(equalTo: replayButton.topAnchor, constant: -16),
+            loadingIndector.topAnchor.constraint(equalTo: loadingBackgroundView.topAnchor, constant: 10),
+            loadingIndector.bottomAnchor.constraint(equalTo: loadingBackgroundView.bottomAnchor, constant: -10),
+            loadingIndector.leadingAnchor.constraint(equalTo: loadingBackgroundView.leadingAnchor, constant: 10),
+            loadingIndector.trailingAnchor.constraint(equalTo: loadingBackgroundView.trailingAnchor, constant: -10),
             seekToView.centerYAnchor.constraint(equalTo: centerYAnchor),
             seekToView.centerXAnchor.constraint(equalTo: centerXAnchor),
             seekToView.widthAnchor.constraint(equalToConstant: 100),
@@ -849,6 +867,19 @@ extension VideoPlayerView {
             lockButton.leadingAnchor.constraint(equalTo: safeLeadingAnchor, constant: 22),
             lockButton.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+        #if os(iOS)
+        // Keep the controls below the camera cutout and extend their background
+        // with the safe area so the entire navigation bar remains tappable.
+        NSLayoutConstraint.activate([
+            topMaskView.bottomAnchor.constraint(equalTo: safeTopAnchor, constant: 105),
+            navigationBar.topAnchor.constraint(equalTo: safeTopAnchor, constant: 8),
+        ])
+        #else
+        NSLayoutConstraint.activate([
+            topMaskView.heightAnchor.constraint(equalToConstant: 105),
+            navigationBar.topAnchor.constraint(equalTo: topMaskView.topAnchor),
+        ])
+        #endif
     }
 
     private func preferredStyle() -> UIAlertController.Style {

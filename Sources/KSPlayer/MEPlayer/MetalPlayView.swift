@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import Combine
 import CoreMedia
 import MetalKit
 
@@ -14,8 +15,12 @@ final class MetalPlayView: UIView {
     private let view = MTKView(frame: .zero, device: MetalRender.device)
     private var videoInfo: CMVideoFormatDescription?
     private var pixelBuffer: CVPixelBuffer?
-//    private lazy var displayLink: CADisplayLink = .init(target: self, selector: #selector(drawView))
+    #if canImport(UIKit)
+    private var displayLink: CADisplayLink?
+    #else
     private let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
+    private var frameRateCancellable: AnyCancellable?
+    #endif
     var options: KSOptions
     weak var renderSource: OutputRenderSourceDelegate?
     #if canImport(UIKit)
@@ -31,13 +36,15 @@ final class MetalPlayView: UIView {
     init(options: KSOptions) {
         self.options = options
         super.init(frame: .zero)
-        _ = options.$preferredFramesPerSecond.sink { value in
-            self.timer.schedule(deadline: .now(), repeating: .milliseconds(Int(ceil(1000.0 / value))))
-        }
+        #if canImport(UIKit)
+        configureDisplayLink()
+        #else
+        observeFrameRate()
         timer.setEventHandler { [weak self] in
             self?.drawView()
         }
         timer.activate()
+        #endif
         #if !canImport(UIKit)
         layer = AVSampleBufferDisplayLayer()
         #endif
@@ -99,6 +106,8 @@ final class MetalPlayView: UIView {
     }
 
     func clear() {
+        pixelBuffer = nil
+        videoInfo = nil
         if view.isHidden {
             displayLayer.flushAndRemoveImage()
         } else {
@@ -108,16 +117,53 @@ final class MetalPlayView: UIView {
         }
     }
 
+    func restoreLastFrame() {
+        guard let pixelBuffer = pixelBuffer else { return }
+        if options.isUseDisplayLayer() {
+            displayLayer.flush()
+        }
+        draw(pixelBuffer: pixelBuffer)
+    }
+
+    #if canImport(UIKit)
+    private func configureDisplayLink() {
+        // Sample at the display cadence, not the movie's nominal frame rate.
+        // A 30 Hz timer can miss a frame's deadline and then discard it on the
+        // next tick. The next display timestamp is stable despite callback jitter.
+        let target = VideoDisplayLinkTarget { [weak self] link in
+            self?.drawView(at: link.targetTimestamp)
+        }
+        let link = CADisplayLink(target: target, selector: #selector(VideoDisplayLinkTarget.draw(_:)))
+        displayLink = link
+        link.isPaused = true
+        link.add(to: .main, forMode: .common)
+    }
+    #else
+    private func observeFrameRate() {
+        frameRateCancellable = options.$preferredFramesPerSecond
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] value in
+                let fps = value.isFinite && value > 0 ? max(Double(value), 60.0) : 60.0
+                // Preserve fractional frame intervals (59.94/60 fps are both below 17 ms).
+                self?.timer.schedule(deadline: .now(), repeating: 1.0 / fps)
+            }
+    }
+    #endif
+
     deinit {
+        #if canImport(UIKit)
+        displayLink?.invalidate()
+        #else
         if isPaused {
             timer.resume()
         }
         timer.cancel()
+        #endif
     }
 }
 
 extension MetalPlayView {
-    private func set(pixelBuffer: CVPixelBuffer, time _: CMTime) {
+    private func set(pixelBuffer: CVPixelBuffer) {
         if videoInfo == nil || !CMVideoFormatDescriptionMatchesImageBuffer(videoInfo!, imageBuffer: pixelBuffer) {
             let err = CMVideoFormatDescriptionCreateForImageBuffer(allocator: nil, imageBuffer: pixelBuffer, formatDescriptionOut: &videoInfo)
             if err != noErr {
@@ -135,14 +181,11 @@ extension MetalPlayView {
             if let attachmentsArray = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, createIfNecessary: true) as? [NSMutableDictionary], let dic = attachmentsArray.first {
                 dic[kCMSampleAttachmentKey_DisplayImmediately] = true
             }
-            if displayLayer.isReadyForMoreMediaData {
-                displayLayer.enqueue(sampleBuffer)
-            }
             if displayLayer.status == .failed {
                 displayLayer.flush()
-                //                    if let error = displayLayer.error as NSError?, error.code == -11847 {
-                //                        displayLayer.stopRequestingMediaData()
-                //                    }
+            }
+            if displayLayer.isReadyForMoreMediaData {
+                displayLayer.enqueue(sampleBuffer)
             }
 //            if let controlTimebase = displayLayer.controlTimebase {
 //                CMTimebaseSetTime(controlTimebase, time: time)
@@ -150,8 +193,14 @@ extension MetalPlayView {
         }
     }
 
-    @objc private func drawView() {
-        guard let frame = renderSource?.getVideoOutputRender() else {
+    private func drawView(at hostTime: TimeInterval = CACurrentMediaTime()) {
+        // A callback already queued at pause must not consume a frame.
+        guard !isPaused else { return }
+        if options.isUseDisplayLayer() {
+            if displayLayer.status == .failed { displayLayer.flush() }
+            guard displayLayer.isReadyForMoreMediaData else { return }
+        }
+        guard let frame = renderSource?.getVideoOutputRender(at: hostTime) else {
             return
         }
         pixelBuffer = frame.corePixelBuffer
@@ -159,7 +208,11 @@ extension MetalPlayView {
             return
         }
         let cmtime = frame.cmtime
-        renderSource?.setVideo(time: cmtime)
+        renderSource?.setVideo(time: cmtime, at: hostTime)
+        draw(pixelBuffer: pixelBuffer)
+    }
+
+    private func draw(pixelBuffer: CVPixelBuffer) {
         let par = pixelBuffer.size
         let sar = pixelBuffer.aspectRatio
         if options.isUseDisplayLayer() {
@@ -172,7 +225,7 @@ extension MetalPlayView {
             if let dar = options.customizeDar(sar: sar, par: par) {
                 pixelBuffer.aspectRatio = CGSize(width: dar.width, height: dar.height * par.width / par.height)
             }
-            set(pixelBuffer: pixelBuffer, time: cmtime)
+            set(pixelBuffer: pixelBuffer)
         } else {
             if view.isHidden {
                 view.isHidden = false
@@ -207,7 +260,11 @@ extension MetalPlayView: FrameOutput {
         set {
             if isPaused != newValue {
                 view.isPaused = newValue
+                #if canImport(UIKit)
+                displayLink?.isPaused = newValue
+                #else
                 newValue ? timer.suspend() : timer.resume()
+                #endif
             }
         }
     }
@@ -221,6 +278,23 @@ extension MetalPlayView: FrameOutput {
         }
     }
 }
+
+#if canImport(UIKit)
+// CADisplayLink retains its target. The closure captures the view weakly so
+// dismissing a player can deinitialize the view and invalidate the display link.
+private final class VideoDisplayLinkTarget: NSObject {
+    private let callback: (CADisplayLink) -> Void
+
+    init(callback: @escaping (CADisplayLink) -> Void) {
+        self.callback = callback
+        super.init()
+    }
+
+    @objc func draw(_ link: CADisplayLink) {
+        callback(link)
+    }
+}
+#endif
 
 #if os(macOS)
 import CoreVideo

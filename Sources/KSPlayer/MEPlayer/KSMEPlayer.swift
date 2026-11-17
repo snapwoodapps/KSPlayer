@@ -127,6 +127,9 @@ extension KSMEPlayer {
         runInMainqueue { [weak self] in
             guard let self = self else { return }
             let isPaused = !(self.playbackState == .playing && self.loadState == .playable)
+            if self.videoOutput.isPaused && !isPaused {
+                self.playerItem.resetVideoClock()
+            }
             self.audioOutput?.isPaused = isPaused
             self.videoOutput.isPaused = isPaused
             self.delegate?.changeLoadState(player: self)
@@ -146,6 +149,7 @@ extension KSMEPlayer: MEPlayerDelegate {
             #else
             self.videoOutput.centerRotate(byDegrees: self.playerItem.rotation)
             #endif
+            self.playerItem.resetVideoClock()
             self.videoOutput.isPaused = false
             self.delegate?.preparedToPlay(player: self)
         }
@@ -399,7 +403,11 @@ extension KSMEPlayer: MediaPlayerProtocol {
 
     public func enterBackground() {}
 
-    public func enterForeground() {}
+    public func enterForeground() {
+        // The display surface may have lost its image while suspended. Redraw
+        // the retained frame without advancing playback or starting the timer.
+        videoOutput.restoreLastFrame()
+    }
 
     public var isMuted: Bool {
         get {

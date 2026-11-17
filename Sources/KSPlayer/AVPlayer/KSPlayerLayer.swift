@@ -155,7 +155,7 @@ open class KSPlayerLayer: UIView {
         registerRemoteControllEvent()
         #if canImport(UIKit)
         NotificationCenter.default.addObserver(self, selector: #selector(enterBackground), name: UIApplication.didEnterBackgroundNotification, object: nil)
-        NotificationCenter.default.addObserver(self, selector: #selector(enterForeground), name: UIApplication.willEnterForegroundNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(enterForeground), name: UIApplication.didBecomeActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(wirelessRouteActiveDidChange(notification:)), name: .MPVolumeViewWirelessRouteActiveDidChange, object: nil)
         #endif
     }
@@ -631,9 +631,8 @@ extension KSPlayerLayer {
     }
 
     @objc private func enterForeground() {
-        if KSPlayerManager.canBackgroundPlay {
-            player?.enterForeground()
-        }
+        // Paused players also need their video surface restored after suspension.
+        player?.enterForeground()
     }
 
     #if canImport(UIKit)

@@ -6,6 +6,7 @@
 //
 
 import AVFoundation
+import FFmpeg
 import Libavformat
 import VideoToolbox
 
@@ -15,6 +16,7 @@ final class MEPlayerItem {
     private let operationQueue = OperationQueue()
     private let condition = NSCondition()
     private var formatCtx: UnsafeMutablePointer<AVFormatContext>?
+    private var readCache: OpaquePointer?
     private var openOperation: BlockOperation?
     private var readOperation: BlockOperation?
     private var closeOperation: BlockOperation?
@@ -38,6 +40,8 @@ final class MEPlayerItem {
     private(set) var currentPlaybackTime = TimeInterval(0)
     private var startTime = TimeInterval(0)
     private var videoClockDelay = TimeInterval(0)
+    private let playbackClockLock = NSLock()
+    private var audioClock: (time: TimeInterval, hostTime: TimeInterval, rate: Double)?
     private(set) var rotation = 0.0
     private(set) var duration: TimeInterval = 0
     private(set) var naturalSize = CGSize.zero
@@ -132,7 +136,7 @@ final class MEPlayerItem {
 extension MEPlayerItem {
     private func openThread() {
         options.starTime = CACurrentMediaTime()
-        avformat_close_input(&self.formatCtx)
+        closeInput()
         formatCtx = avformat_alloc_context()
         guard let formatCtx = formatCtx else {
             error = NSError(errorCode: .formatCreate)
@@ -157,6 +161,16 @@ extension MEPlayerItem {
 //            return 0
 //        }
         var avOptions = options.formatContextOptions.avOptions
+        if options.isHTTPReadCacheEnabled, ["http", "https"].contains(url.scheme?.lowercased() ?? "") {
+            let status = ks_read_cache_open(&readCache, url.absoluteString, avOptions, &interruptCB)
+            if status >= 0 {
+                formatCtx.pointee.pb = ks_read_cache_context(readCache)
+                formatCtx.pointee.flags |= AVFMT_FLAG_CUSTOM_IO
+                KSLog("Enabled HTTP read cache (4 x 1 MiB)")
+            } else {
+                KSLog("HTTP read cache unavailable (\(status)); using direct input")
+            }
+        }
         let urlString: String
         if url.isFileURL {
             urlString = url.path
@@ -170,12 +184,13 @@ extension MEPlayerItem {
         var result = avformat_open_input(&self.formatCtx, urlString, nil, &avOptions)
         av_dict_free(&avOptions)
         if result == AVError.eof.code {
+            closeInput()
             state = .finished
             return
         }
         guard result == 0 else {
             error = .init(errorCode: .formatOpenInput, ffmpegErrnum: result)
-            avformat_close_input(&self.formatCtx)
+            closeInput()
             return
         }
         formatCtx.pointee.flags |= AVFMT_FLAG_GENPTS
@@ -190,7 +205,7 @@ extension MEPlayerItem {
         result = avformat_find_stream_info(formatCtx, nil)
         guard result == 0 else {
             error = .init(errorCode: .formatFindStreamInfo, ffmpegErrnum: result)
-            avformat_close_input(&self.formatCtx)
+            closeInput()
             return
         }
         options.findTime = CACurrentMediaTime()
@@ -204,6 +219,15 @@ extension MEPlayerItem {
             state = .reading
             read()
         }
+    }
+
+    private func closeInput() {
+        avformat_close_input(&formatCtx)
+        if let readCache {
+            let stats = ks_read_cache_stats(readCache)
+            KSLog("HTTP read cache hits=\(stats.hits) misses=\(stats.misses) bytes=\(stats.bytes_read) allocated=\(stats.allocated_bytes)")
+        }
+        ks_read_cache_close(&readCache)
     }
 
     private func createCodec(formatCtx: UnsafeMutablePointer<AVFormatContext>) {
@@ -420,7 +444,7 @@ extension MEPlayerItem: MediaPlayback {
             self.allTracks.forEach { $0.shutdown() }
             ObjectPool.share.removeAll()
             KSLog("清空formatCtx")
-            avformat_close_input(&self.formatCtx)
+            self.closeInput()
             self.duration = 0
             self.closeOperation = nil
             self.operationQueue.cancelAllOperations()
@@ -443,11 +467,13 @@ extension MEPlayerItem: MediaPlayback {
         if state == .reading || state == .paused {
             state = .seeking
             currentPlaybackTime = time
+            resetVideoClock()
             seekingCompletionHandler = handler
             condition.broadcast()
         } else if state == .finished {
             state = .seeking
             currentPlaybackTime = time
+            resetVideoClock()
             seekingCompletionHandler = handler
             read()
         }
@@ -521,41 +547,81 @@ extension MEPlayerItem: CodecCapacityDelegate {
 }
 
 extension MEPlayerItem: OutputRenderSourceDelegate {
-    func setVideo(time: CMTime) {
+    func resetVideoClock() {
+        // Paused/buffering time must not become overdue video on the next draw.
+        // Keep the media position, but start a fresh wall-clock interval.
+        playbackClockLock.lock()
+        defer { playbackClockLock.unlock() }
+        videoMediaTime = CACurrentMediaTime()
+        videoClockDelay = 0
+        audioClock = nil
+    }
+
+    func setVideo(time: CMTime, at hostTime: TimeInterval = CACurrentMediaTime()) {
+        playbackClockLock.lock()
+        defer { playbackClockLock.unlock() }
         if state == .seeking {
             return
         }
         if isAudioStalled {
             currentPlaybackTime = time.seconds - options.audioDelay - startTime
-            videoMediaTime = CACurrentMediaTime()
+            videoMediaTime = hostTime
+            audioClock = nil
         }
     }
 
-    func setAudio(time: CMTime) {
+    func setAudio(time: CMTime, rate: Double = 1) {
+        // Never block the audio render thread on the UI's clock snapshot.
+        guard playbackClockLock.try() else { return }
+        defer { playbackClockLock.unlock() }
         if state == .seeking {
             return
         }
         if !isAudioStalled {
             currentPlaybackTime = time.seconds - startTime
+            let now = CACurrentMediaTime()
+            audioClock = (time.seconds, now, rate)
+            // Anchor the video-only tail when the audio track ends first.
+            videoMediaTime = now
+            videoClockDelay = 0
         }
     }
 
-    func getVideoOutputRender() -> VideoVTBFrame? {
-        var desire = currentPlaybackTime + options.audioDelay + startTime
-        let predicate: (VideoVTBFrame) -> Bool = { [weak self] frame -> Bool in
-            guard let self = self else { return true }
-            desire = self.currentPlaybackTime + self.options.audioDelay + self.startTime
-            if self.isAudioStalled {
-                desire += max(CACurrentMediaTime() - self.videoMediaTime, 0) + self.videoClockDelay
-            }
-            return frame.seconds <= desire
+    func getVideoOutputRender(at hostTime: TimeInterval = CACurrentMediaTime()) -> VideoVTBFrame? {
+        guard let videoTrack = videoTrack else {
+            return nil
         }
-        let frame = videoTrack?.getOutputRender(where: predicate)
-        if let frame = frame {
-            videoClockDelay = desire - frame.seconds
-            if frame.seconds + 0.4 < desire {
-                _ = videoTrack?.getOutputRender(where: nil)
+        playbackClockLock.lock()
+        var desire = currentPlaybackTime + options.audioDelay + startTime
+        if isAudioStalled {
+            desire += max(hostTime - videoMediaTime, 0) + videoClockDelay
+        } else if let audioClock = audioClock {
+            // Audio publishes in blocks. Interpolate to the next display time
+            // rather than repeating/skipping frames at those block boundaries.
+            // Do not run far ahead if callbacks stop during a stall.
+            let elapsed = min(max(hostTime - audioClock.hostTime, 0), 0.1)
+            desire = audioClock.time + elapsed * audioClock.rate + options.audioDelay
+        }
+        playbackClockLock.unlock()
+        let predicate: (VideoVTBFrame) -> Bool = { $0.seconds <= desire + 0.000001 }
+        let availableFrameCount = videoTrack.frameCount
+        var frame = videoTrack.getOutputRender(where: predicate)
+        if frame != nil {
+            // Draw the latest due frame after a delayed tick. Bound the work to the
+            // frames already queued so a refilling decoder cannot monopolize the UI.
+            for _ in 1 ..< max(availableFrameCount, 1) {
+                guard let nextFrame = videoTrack.getOutputRender(where: predicate) else {
+                    break
+                }
+                frame = nextFrame
             }
+        }
+        if let frame = frame {
+            playbackClockLock.lock()
+            if isAudioStalled {
+                videoClockDelay = desire - frame.seconds
+            }
+            playbackClockLock.unlock()
         }
         return frame
     }

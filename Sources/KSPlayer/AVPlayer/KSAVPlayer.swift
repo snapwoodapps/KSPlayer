@@ -432,14 +432,13 @@ extension KSAVPlayer: MediaPlayerProtocol {
             self.bufferingProgress = 0
             let playerItem = AVPlayerItem(asset: self.urlAsset)
             self.options.openTime = CACurrentMediaTime()
-            self.replaceCurrentItem(playerItem: playerItem)
-            self.player.actionAtItemEnd = .pause
-            self.player.volume = self.playbackVolume
-            
-            //@BWOOD fix for muted videos
+            // Apply mute before attaching an item that may become ready immediately.
             if self.options.audioDisable {
                 self.player.isMuted = true
             }
+            self.replaceCurrentItem(playerItem: playerItem)
+            self.player.actionAtItemEnd = .pause
+            self.player.volume = self.playbackVolume
         }
     }
 

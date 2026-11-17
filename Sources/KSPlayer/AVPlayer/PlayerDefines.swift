@@ -180,6 +180,8 @@ open class KSOptions {
     public var seekFlags = Int32(1)
 //    ffmpeg only cache http
     public var cache = false
+    /// Bounded random-read windows for seekable HTTP media with separated tracks.
+    public var isHTTPReadCacheEnabled = false
     public var display = DisplayEnum.plane
     public var audioDelay = 0.0 // s
     public var subtitleDelay = 0.0 // s
